@@ -2,11 +2,15 @@ from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
-from bot.states.tile_calc import TileCalcState
+from states.tile_calc import TileCalcState
+from utils.logger import log_user_action
+
 
 router = Router()
 
+
 @router.message(F.text == "Рассчитать плитку")
+@log_user_action('Рассчитать плитку')
 async def start_tile_calc(message: Message, state: FSMContext):
     await message.answer("Введите площадь помещения в м²:")
     await state.set_state(TileCalcState.waiting_for_area)
