@@ -3,7 +3,7 @@ name: Main Stroyka bot workflow
 on:
   push:
     branches:
-      - main
+      - master
 
 jobs:
   build-and-deploy:
