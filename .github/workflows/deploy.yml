@@ -22,16 +22,18 @@ jobs:
           # 1) Инжектим ключ сервисного аккаунта
           echo "${{ secrets.YC_SA_KEY }}" > key.json
 
-          # 2) Скачиваем официальный архив yc и распаковываем в /usr/local/bin
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/latest/linux/amd64/yandex-cloud-cli-latest-linux-amd64.tar.gz \
-            | sudo tar -xz -C /usr/local/bin yc
+          # 2) Скачиваем инсталлятор в файл
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh \
+            -o yc_install.sh
+          chmod +x yc_install.sh
 
-          sudo chmod +x /usr/local/bin/yc
+          # 3) Устанавливаем yc в /usr/local/bin
+          sudo bash yc_install.sh -b /usr/local/bin
 
-          # 3) Проверяем доступность
+          # 4) Проверяем версию
           yc --version
 
-          # 4) Настраиваем CLI
+          # 5) Настраиваем CLI
           yc config set service-account-key key.json
           yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
           yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
