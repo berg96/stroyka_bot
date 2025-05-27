@@ -1,65 +1,50 @@
-name: Deploy to Yandex Cloud VM
+# .github/workflows/deploy.yml
+name: Build & Deploy to VM
 
 on:
   push:
-    branches:
-      - master
-
-env:
-  IMAGE_NAME: cr.yandex/${{ secrets.YC_REGISTRY_ID }}/stroyka-bot:latest
-  REMOTE_DIR: /home/${{ secrets.VM_USER }}/stroyka-bot
+    branches: [ main ]    # или master, как вам удобнее
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # 1) Клонируем код
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Docker login to YCR via OAuth token
-        run: echo -n "${{ secrets.YCR_TOKEN }}" | docker login -u oauth --password-stdin "cr.yandex/${{ secrets.YC_REGISTRY_ID }}"
-
-      - name: Build & push Docker image
+      # 2) Собираем Docker-образ
+      - name: Build Docker image
         run: |
-          docker build -t $IMAGE_NAME .
-          docker push $IMAGE_NAME
+          docker build -t stroyka-bot:latest .
 
-      - name: Create .env from secret
+      # 3) Упаковываем образ и через SSH грузим его на сервер
+      - name: Send image to VM & reload container
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
         run: |
-          echo "${{ secrets.ENV_FILE }}" > .env
-
-      - name: Prepare SSH key
-        run: |
+          # Подготавливаем приватный ключ
           echo "${{ secrets.VM_SSH_KEY }}" > deploy_key
           chmod 600 deploy_key
 
-      - name: Copy files to VM
-        run: |
-          scp -o StrictHostKeyChecking=no -i deploy_key \
-            .env docker-compose.yml \
-            ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:$REMOTE_DIR
+          # Сохраняем образ в поток, шлём по SSH и сразу делаем docker load & up
+          docker save stroyka-bot:latest \
+            | ssh -o StrictHostKeyChecking=no -i deploy_key \
+                $VM_USER@$VM_HOST \
+              "docker load && \
+               cd /home/$VM_USER/stroyka-bot && \
+               docker-compose up -d --build --remove-orphans"
 
-      - name: SSH and restart bot
-        run: |
-          ssh -o StrictHostKeyChecking=no -i deploy_key \
-            ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} << 'EOF'
-              cd $REMOTE_DIR
-              docker-compose pull
-              docker-compose up -d --remove-orphans
-            EOF
-
-  send_message:
-    runs-on: ubuntu-latest
-    needs: deploy
-    steps:
+      # 4) (опционально) отправляем уведомление в Telegram
       - name: Send Telegram notification
+        if: success()
         uses: appleboy/telegram-action@master
         with:
           to:      ${{ secrets.TELEGRAM_TO }}
           token:   ${{ secrets.TELEGRAM_TOKEN }}
           message: |
-            В ${{ github.repository }}
-            ${{ github.actor }} запушил коммит
-            "${{ github.event.commits[0].message }}"
-            Деплой stroyka_bot выполнен!
+            ✅ Деплой завершён!
+            Репозиторий: ${{ github.repository }}
+            Коммит: ${{ github.sha }}
