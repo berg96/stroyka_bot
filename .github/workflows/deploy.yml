@@ -16,17 +16,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Configure Yandex CLI
-        uses: yc-actions/yc-cli-action@v1
+      - name: Configure Yandex Cloud CLI
+        uses: yandex-cloud/github-action-cli@v1
         with:
-          yc-sa-json-credentials: ${{ secrets.YC_SA_KEY }}
+          service-account-key-json: ${{ secrets.YC_SA_KEY }}
+          cloud-id:             ${{ secrets.YC_CLOUD_ID }}
+          folder-id:            ${{ secrets.YC_FOLDER_ID }}
 
       - name: Docker login to YCR
         run: |
-          echo "${{ secrets.YC_SA_KEY }}" > key.json
-          yc config set service-account-key key.json
-          yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
-          yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
           yc container registry configure-docker
 
       - name: Build Docker image
@@ -36,24 +34,23 @@ jobs:
         run: docker push $IMAGE_NAME
 
       - name: Create .env file from GitHub Secret
-        run: |
-          echo "${{ secrets.ENV_FILE }}" > .env
+        run: echo "${{ secrets.ENV_FILE }}" > .env
 
       - name: Copy files to VM
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.VM_HOST }}
+          host:     ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
-          key: ${{ secrets.VM_SSH_KEY }}
-          source: ".env,docker-compose.yml"
-          target: /home/${{ secrets.VM_USER }}/your-bot-folder/
+          key:      ${{ secrets.VM_SSH_KEY }}
+          source:   ".env,docker-compose.yml"
+          target:   /home/${{ secrets.VM_USER }}/your-bot-folder/
 
       - name: SSH and restart bot
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.VM_HOST }}
+          host:     ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
-          key: ${{ secrets.VM_SSH_KEY }}
+          key:      ${{ secrets.VM_SSH_KEY }}
           script: |
             cd /home/${{ secrets.VM_USER }}/your-bot-folder/
             docker-compose pull
@@ -63,13 +60,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: deploy
     steps:
-      - name: Send message
+      - name: Send Telegram notification
         uses: appleboy/telegram-action@master
         with:
-          to: ${{ secrets.TELEGRAM_TO }}
-          token: ${{ secrets.TELEGRAM_TOKEN }}
+          to:      ${{ secrets.TELEGRAM_TO }}
+          token:   ${{ secrets.TELEGRAM_TOKEN }}
           message: |
             В ${{ github.repository }}
-            ${{ github.actor }} запушил с коммитом
+            ${{ github.actor }} запушил коммит
             "${{ github.event.commits[0].message }}"
-            Деплой stroyka_bot успешно выполнен!
+            Деплой stroyka-bot выполнен!
