@@ -1,9 +1,9 @@
-# .github/workflows/deploy.yml
 name: Build & Deploy to VM
 
 on:
   push:
-    branches: [ main ]    # или master, как вам удобнее
+    branches:
+      - master
 
 jobs:
   deploy:
