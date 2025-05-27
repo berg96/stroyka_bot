@@ -17,7 +17,7 @@ jobs:
       # 2) Собираем Docker-образ
       - name: Build Docker image
         run: |
-          docker build -t stroyka-bot:latest .
+          docker build -t stroyka-bot:latest -f bot/Dockerfile .
 
       # 3) Упаковываем образ и через SSH грузим его на сервер
       - name: Send image to VM & reload container
