@@ -34,7 +34,7 @@ jobs:
             | ssh -o StrictHostKeyChecking=no -i deploy_key \
                 $VM_USER@$VM_HOST \
               "docker load && \
-               cd /home/$VM_USER/stroyka-bot && \
+               cd stroyka-bot && \
                docker-compose up -d --build --remove-orphans"
 
       # 4) (опционально) отправляем уведомление в Telegram
