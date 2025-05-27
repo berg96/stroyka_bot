@@ -19,8 +19,9 @@ jobs:
 
       - name: Docker login to YCR via OAuth token
         run: |
-          printf '%s' "${{ secrets.YCR_TOKEN }}" \
-            | docker login -u oauth --password-stdin cr.yandex/${{ secrets.YC_REGISTRY_ID }}
+          TOKEN="${{ secrets.YCR_TOKEN }}"
+          # echo -n чтобы не добавить лишний \n
+          echo -n "$TOKEN" | docker login -u oauth --password-stdin "cr.yandex/${{ secrets.YC_REGISTRY_ID }}"
 
       - name: Build & push Docker image
         run: |
@@ -28,11 +29,12 @@ jobs:
           docker push $IMAGE_NAME
 
       - name: Create .env from secret
-        run: printf '%s' "${{ secrets.ENV_FILE }}" > .env
+        run: |
+          echo "${{ secrets.ENV_FILE }}" > .env
 
       - name: Prepare SSH key
         run: |
-          printf '%s' "${{ secrets.VM_SSH_KEY }}" > deploy_key
+          echo "${{ secrets.VM_SSH_KEY }}" > deploy_key
           chmod 600 deploy_key
 
       - name: Copy files to VM
