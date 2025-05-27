@@ -12,37 +12,16 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Install & configure Yandex Cloud CLI via apt
+      - name: Docker login to YCR via OAuth token
         run: |
-          # 1) Добавляем репозиторий Yandex Cloud CLI
-          sudo apt-get update
-          sudo apt-get install -y apt-transport-https ca-certificates gnupg curl
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc-deb/KEY.gpg \
-            | sudo gpg --dearmor -o /usr/share/keyrings/yandexcloud-yc-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/yandexcloud-yc-archive-keyring.gpg] https://storage.yandexcloud.net/yandexcloud-yc-deb stable main" \
-            | sudo tee /etc/apt/sources.list.d/yandex-cloud-cli.list
-
-          # 2) Устанавливаем yc из репозитория
-          sudo apt-get update
-          sudo apt-get install -y yandex-cloud-cli
-
-          # 3) Инжектим ключ в файл и настраиваем CLI
-          echo "${{ secrets.YC_SA_KEY }}" > key.json
-          yc config set service-account-key key.json
-          yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
-          yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
-
-          # 4) Проверим
-          yc --version
-
-      - name: Docker login to Yandex Container Registry
-        run: |
-          yc container registry configure-docker
+          echo "${{ secrets.YCR_TOKEN }}" | docker login \
+            -u oauth \
+            --password-stdin \
+            cr.yandex/${{ secrets.YC_REGISTRY_ID }}
 
       - name: Build & push Docker image
         run: |
@@ -50,8 +29,7 @@ jobs:
           docker push $IMAGE_NAME
 
       - name: Create .env from secret
-        run: |
-          echo "${{ secrets.ENV_FILE }}" > .env
+        run: echo "${{ secrets.ENV_FILE }}" > .env
 
       - name: Prepare SSH key
         run: |
@@ -80,8 +58,8 @@ jobs:
       - name: Send Telegram notification
         uses: appleboy/telegram-action@master
         with:
-          to:    ${{ secrets.TELEGRAM_TO }}
-          token: ${{ secrets.TELEGRAM_TOKEN }}
+          to:      ${{ secrets.TELEGRAM_TO }}
+          token:   ${{ secrets.TELEGRAM_TOKEN }}
           message: |
             В ${{ github.repository }}
             ${{ github.actor }} запушил коммит
