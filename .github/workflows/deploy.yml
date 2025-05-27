@@ -17,26 +17,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Install & configure Yandex Cloud CLI
+      - name: Install & configure Yandex Cloud CLI via apt
         run: |
-          # 1) Инжектим ключ сервисного аккаунта
+          # 1) Добавляем репозиторий Yandex Cloud CLI
+          sudo apt-get update
+          sudo apt-get install -y apt-transport-https ca-certificates gnupg curl
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc-deb/KEY.gpg \
+            | sudo gpg --dearmor -o /usr/share/keyrings/yandexcloud-yc-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/yandexcloud-yc-archive-keyring.gpg] https://storage.yandexcloud.net/yandexcloud-yc-deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/yandex-cloud-cli.list
+
+          # 2) Устанавливаем yc из репозитория
+          sudo apt-get update
+          sudo apt-get install -y yandex-cloud-cli
+
+          # 3) Инжектим ключ в файл и настраиваем CLI
           echo "${{ secrets.YC_SA_KEY }}" > key.json
-
-          # 2) Скачиваем инсталлятор в файл
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh \
-            -o yc_install.sh
-          chmod +x yc_install.sh
-
-          # 3) Устанавливаем yc в /usr/local/bin
-          sudo bash yc_install.sh -b /usr/local/bin
-
-          # 4) Проверяем версию
-          yc --version
-
-          # 5) Настраиваем CLI
           yc config set service-account-key key.json
           yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
           yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
+
+          # 4) Проверим
+          yc --version
 
       - name: Docker login to Yandex Container Registry
         run: |
