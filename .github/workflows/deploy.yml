@@ -7,54 +7,72 @@ on:
 
 env:
   IMAGE_NAME: cr.yandex/${{ secrets.YC_REGISTRY_ID }}/stroyka-bot:latest
+  REMOTE_DIR: /home/${{ secrets.VM_USER }}/stroyka-bot
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # 1) Клонируем код
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Configure Yandex Cloud CLI
-        uses: yandex-cloud/github-action-cli@v1
-        with:
-          service-account-key-json: ${{ secrets.YC_SA_KEY }}
-          cloud-id:             ${{ secrets.YC_CLOUD_ID }}
-          folder-id:            ${{ secrets.YC_FOLDER_ID }}
-
-      - name: Docker login to YCR
+      # 2) Устанавливаем YC CLI и настраиваем его
+      - name: Install & configure Yandex Cloud CLI
         run: |
+          # 2.1. Инжектим ключ сервисного аккаунта в файл
+          echo "${{ secrets.YC_SA_KEY }}" > key.json
+
+          # 2.2. Скачиваем и ставим официальную утилиту yc
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
+
+          # 2.3. Добавляем ее в PATH
+          export PATH="$HOME/bin:$PATH"
+          yc --version
+
+          # 2.4. Настраиваем профиль
+          yc config set service-account-key key.json
+          yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
+          yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
+
+      # 3) Логиним Docker в YCR
+      - name: Docker login to Yandex Container Registry
+        run: |
+          export PATH="$HOME/bin:$PATH"
           yc container registry configure-docker
 
-      - name: Build Docker image
-        run: docker build -t $IMAGE_NAME .
+      # 4) Сборка и пуш Docker-образа
+      - name: Build & push Docker image
+        run: |
+          docker build -t $IMAGE_NAME .
+          docker push $IMAGE_NAME
 
-      - name: Push Docker image to YCR
-        run: docker push $IMAGE_NAME
-
-      - name: Create .env file from GitHub Secret
+      # 5) Генерируем .env из секрета (опционально)
+      - name: Create .env from secret
         run: echo "${{ secrets.ENV_FILE }}" > .env
 
-      - name: Copy files to VM
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host:     ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_USER }}
-          key:      ${{ secrets.VM_SSH_KEY }}
-          source:   ".env,docker-compose.yml"
-          target:   /home/${{ secrets.VM_USER }}/your-bot-folder/
+      # 6) Подготовка SSH-ключа
+      - name: Prepare SSH key
+        run: |
+          echo "${{ secrets.VM_SSH_KEY }}" > deploy_key
+          chmod 600 deploy_key
 
+      # 7) Копируем файлы на сервер через scp
+      - name: Copy files to VM
+        run: |
+          scp -o StrictHostKeyChecking=no -i deploy_key .env docker-compose.yml \
+              ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:$REMOTE_DIR
+
+      # 8) Перезапускаем контейнеры на сервере через SSH
       - name: SSH and restart bot
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host:     ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_USER }}
-          key:      ${{ secrets.VM_SSH_KEY }}
-          script: |
-            cd /home/${{ secrets.VM_USER }}/your-bot-folder/
+        run: |
+          ssh -o StrictHostKeyChecking=no -i deploy_key \
+            ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} << 'EOF'
+            cd $REMOTE_DIR
             docker-compose pull
             docker-compose up -d --remove-orphans
+            EOF
 
   send_message:
     runs-on: ubuntu-latest
@@ -63,10 +81,10 @@ jobs:
       - name: Send Telegram notification
         uses: appleboy/telegram-action@master
         with:
-          to:      ${{ secrets.TELEGRAM_TO }}
-          token:   ${{ secrets.TELEGRAM_TOKEN }}
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
           message: |
             В ${{ github.repository }}
             ${{ github.actor }} запушил коммит
             "${{ github.event.commits[0].message }}"
-            Деплой stroyka-bot выполнен!
+            Деплой stroyka_bot выполнен!
