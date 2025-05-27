@@ -14,64 +14,52 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) Клонируем код
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2) Устанавливаем YC CLI и настраиваем его
       - name: Install & configure Yandex Cloud CLI
         run: |
-          # 2.1. Инжектим ключ сервисного аккаунта в файл
           echo "${{ secrets.YC_SA_KEY }}" > key.json
 
-          # 2.2. Скачиваем и ставим официальную утилиту yc
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh \
+            | bash -s -- -b /usr/local/bin
 
-          # 2.3. Добавляем ее в PATH
-          export PATH="$HOME/bin:$PATH"
           yc --version
 
-          # 2.4. Настраиваем профиль
           yc config set service-account-key key.json
           yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
           yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
 
-      # 3) Логиним Docker в YCR
       - name: Docker login to Yandex Container Registry
         run: |
-          export PATH="$HOME/bin:$PATH"
           yc container registry configure-docker
 
-      # 4) Сборка и пуш Docker-образа
       - name: Build & push Docker image
         run: |
           docker build -t $IMAGE_NAME .
           docker push $IMAGE_NAME
 
-      # 5) Генерируем .env из секрета (опционально)
       - name: Create .env from secret
         run: echo "${{ secrets.ENV_FILE }}" > .env
 
-      # 6) Подготовка SSH-ключа
       - name: Prepare SSH key
         run: |
           echo "${{ secrets.VM_SSH_KEY }}" > deploy_key
           chmod 600 deploy_key
 
-      # 7) Копируем файлы на сервер через scp
       - name: Copy files to VM
         run: |
-          scp -o StrictHostKeyChecking=no -i deploy_key .env docker-compose.yml \
-              ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:$REMOTE_DIR
+          scp -o StrictHostKeyChecking=no -i deploy_key \
+            .env docker-compose.yml \
+            ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:$REMOTE_DIR
 
-      # 8) Перезапускаем контейнеры на сервере через SSH
       - name: SSH and restart bot
         run: |
           ssh -o StrictHostKeyChecking=no -i deploy_key \
             ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} << 'EOF'
-            cd $REMOTE_DIR
-            docker-compose pull
-            docker-compose up -d --remove-orphans
+              cd $REMOTE_DIR
+              docker-compose pull
+              docker-compose up -d --remove-orphans
             EOF
 
   send_message:
