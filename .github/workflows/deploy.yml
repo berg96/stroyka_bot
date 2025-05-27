@@ -12,13 +12,14 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
       - name: Docker login to YCR via OAuth token
         run: |
-          echo "${{ secrets.YCR_TOKEN }}" \
+          printf '%s' "${{ secrets.YCR_TOKEN }}" \
             | docker login -u oauth --password-stdin cr.yandex/${{ secrets.YC_REGISTRY_ID }}
 
       - name: Build & push Docker image
@@ -27,11 +28,11 @@ jobs:
           docker push $IMAGE_NAME
 
       - name: Create .env from secret
-        run: echo "${{ secrets.ENV_FILE }}" > .env
+        run: printf '%s' "${{ secrets.ENV_FILE }}" > .env
 
       - name: Prepare SSH key
         run: |
-          echo "${{ secrets.VM_SSH_KEY }}" > deploy_key
+          printf '%s' "${{ secrets.VM_SSH_KEY }}" > deploy_key
           chmod 600 deploy_key
 
       - name: Copy files to VM
