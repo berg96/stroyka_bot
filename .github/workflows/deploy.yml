@@ -19,19 +19,27 @@ jobs:
 
       - name: Install & configure Yandex Cloud CLI
         run: |
+          # 1. Записываем ключ сервисного аккаунта
           echo "${{ secrets.YC_SA_KEY }}" > key.json
 
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh \
-            | bash -s -- -b /usr/local/bin
+          # 2. Скачиваем и устанавливаем yc (попадает в $HOME/bin)
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
 
+          # 3. Обновляем PATH, чтобы сразу видеть yc
+          export PATH="$HOME/bin:$PATH"
+
+          # 4. Проверяем версию
           yc --version
 
+          # 5. Настраиваем CLI
           yc config set service-account-key key.json
           yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
           yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
 
       - name: Docker login to Yandex Container Registry
         run: |
+          # убедимся, что yc доступен
+          export PATH="$HOME/bin:$PATH"
           yc container registry configure-docker
 
       - name: Build & push Docker image
@@ -40,7 +48,8 @@ jobs:
           docker push $IMAGE_NAME
 
       - name: Create .env from secret
-        run: echo "${{ secrets.ENV_FILE }}" > .env
+        run: |
+          echo "${{ secrets.ENV_FILE }}" > .env
 
       - name: Prepare SSH key
         run: |
@@ -69,7 +78,7 @@ jobs:
       - name: Send Telegram notification
         uses: appleboy/telegram-action@master
         with:
-          to: ${{ secrets.TELEGRAM_TO }}
+          to:    ${{ secrets.TELEGRAM_TO }}
           token: ${{ secrets.TELEGRAM_TOKEN }}
           message: |
             В ${{ github.repository }}
