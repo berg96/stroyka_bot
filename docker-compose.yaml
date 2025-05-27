@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   bot:
-    image: cr.yandex/${YC_REGISTRY_ID}/stroyka-bot:latest
+    image: berg1005/stroyka-bot:latest
     container_name: stroyka_bot
     env_file:
       - .env
