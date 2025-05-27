@@ -6,9 +6,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /bot
 
-COPY ../requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY ./bot .
 
 CMD ["python", "main.py"]

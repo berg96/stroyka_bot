@@ -24,7 +24,7 @@ jobs:
       - name: Push to DockerHub
         uses: docker/build-push-action@v4
         with:
-          context: ./bot/
+          context: .
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/stroyka_bot:latest
 
