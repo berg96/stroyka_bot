@@ -18,10 +18,8 @@ jobs:
 
       - name: Docker login to YCR via OAuth token
         run: |
-          echo "${{ secrets.YCR_TOKEN }}" | docker login \
-            -u oauth \
-            --password-stdin \
-            cr.yandex/${{ secrets.YC_REGISTRY_ID }}
+          echo "${{ secrets.YCR_TOKEN }}" \
+            | docker login -u oauth --password-stdin cr.yandex/${{ secrets.YC_REGISTRY_ID }}
 
       - name: Build & push Docker image
         run: |
