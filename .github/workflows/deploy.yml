@@ -31,7 +31,12 @@ jobs:
           -d "{\"access_key_id\":\"${{ secrets.YC_ACCESS_KEY_ID }}\",\"secret_access_key\":\"${{ secrets.YC_SECRET_ACCESS_KEY }}\"}" \
           https://iam.api.cloud.yandex.net/iam/v1/tokens)
 
-        IAM_TOKEN=$(echo $TOKEN_RESPONSE | python3 -c "import sys, json; print(json.load(sys.stdin)['iamToken'])")
+        echo "Token response: $TOKEN_RESPONSE"
+        IAM_TOKEN=$(echo $TOKEN_RESPONSE | python3 -c "import sys, json; print(json.load(sys.stdin).get('iamToken', 'MISSING'))")
+        if [ "$IAM_TOKEN" = "MISSING" ]; then
+          echo "❌ Ошибка: Токен не получен. Проверь ключи доступа."
+          exit 1
+        fi
         echo "::add-mask::$IAM_TOKEN"
         echo "IAM_TOKEN=$IAM_TOKEN" >> $GITHUB_ENV
 
