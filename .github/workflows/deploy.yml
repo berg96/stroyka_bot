@@ -18,10 +18,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Docker login to YCR via OAuth token
-        run: |
-          TOKEN="${{ secrets.YCR_TOKEN }}"
-          # echo -n чтобы не добавить лишний \n
-          echo -n "$TOKEN" | docker login -u oauth --password-stdin "cr.yandex/${{ secrets.YC_REGISTRY_ID }}"
+        run: echo -n "${{ secrets.YCR_TOKEN }}" | docker login -u oauth --password-stdin "cr.yandex/${{ secrets.YC_REGISTRY_ID }}"
 
       - name: Build & push Docker image
         run: |
