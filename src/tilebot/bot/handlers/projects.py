@@ -21,6 +21,10 @@ from tilebot.storage import Project, Storage, payload_to_surface
 router = Router(name="projects")
 logger = logging.getLogger(__name__)
 
+# Чужой объект и несуществующий для мастера — одно и то же: не подсказываем, что
+# объект с таким номером вообще есть.
+NOT_YOURS = "Объект не найден."
+
 
 def _rebuild(project: Project) -> tuple[list[Layout], list[Materials], bool]:
     """Пересобрать раскладки объекта из сохранённых замеров."""
@@ -57,10 +61,10 @@ async def my_projects(message: Message, storage: Storage) -> None:
 @router.callback_query(F.data.startswith("open:"))
 async def open_project(call: CallbackQuery, storage: Storage) -> None:
     project_id = int(call.data.split(":")[1])
-    project = await storage.get_project(project_id)
+    project = await storage.get_project(project_id, call.from_user.id)
     await call.answer()
     if not project:
-        await call.message.answer("Объект не найден.")
+        await call.message.answer(NOT_YOURS)
         return
 
     lines = [f"<b>{project.title}</b>", f"Поверхностей: {len(project.surfaces)}"]
@@ -79,9 +83,12 @@ async def open_project(call: CallbackQuery, storage: Storage) -> None:
 @router.callback_query(F.data.startswith("summary:"))
 async def summary(call: CallbackQuery, storage: Storage) -> None:
     project_id = int(call.data.split(":")[1])
-    project = await storage.get_project(project_id)
+    project = await storage.get_project(project_id, call.from_user.id)
     await call.answer()
-    if not project or not project.surfaces:
+    if not project:
+        await call.message.answer(NOT_YOURS)
+        return
+    if not project.surfaces:
         await call.message.answer("В объекте пока нет поверхностей.")
         return
 
@@ -121,9 +128,12 @@ async def summary(call: CallbackQuery, storage: Storage) -> None:
 @router.callback_query(F.data.startswith("estimate:"))
 async def estimate(call: CallbackQuery, storage: Storage, state: FSMContext) -> None:
     project_id = int(call.data.split(":")[1])
-    project = await storage.get_project(project_id)
+    project = await storage.get_project(project_id, call.from_user.id)
     await call.answer()
-    if not project or not project.surfaces:
+    if not project:
+        await call.message.answer(NOT_YOURS)
+        return
+    if not project.surfaces:
         await call.message.answer("В объекте пока нет поверхностей.")
         return
 
@@ -156,6 +166,8 @@ async def estimate(call: CallbackQuery, storage: Storage, state: FSMContext) -> 
 @router.callback_query(F.data.startswith("delete:"))
 async def delete_project(call: CallbackQuery, storage: Storage) -> None:
     project_id = int(call.data.split(":")[1])
-    await storage.delete_project(project_id)
-    await call.answer("Удалил")
-    await call.message.answer("Объект удалён.", reply_markup=kb.MAIN_MENU)
+    deleted = await storage.delete_project(project_id, call.from_user.id)
+    await call.answer("Удалил" if deleted else "Объект не найден")
+    await call.message.answer(
+        "Объект удалён." if deleted else NOT_YOURS, reply_markup=kb.MAIN_MENU
+    )

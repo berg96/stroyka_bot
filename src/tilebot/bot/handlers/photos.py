@@ -45,9 +45,15 @@ async def save_photo(message: Message, state: FSMContext, storage: Storage) -> N
 
     # Берём самый крупный размер — Telegram отдаёт лесенку превью.
     file_id = message.photo[-1].file_id
-    await storage.add_photo(project_id, file_id, message.caption or "")
+    saved = await storage.add_photo(
+        project_id, message.from_user.id, file_id, message.caption or ""
+    )
+    if not saved:
+        await state.clear()
+        await message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
+        return
 
-    project = await storage.get_project(project_id)
+    project = await storage.get_project(project_id, message.from_user.id)
     await message.answer(
         f"Сохранил в «{project.title}». Фото в объекте: <b>{len(project.photos)}</b>.\n"
         "<i>Шли ещё или /cancel.</i>"
@@ -62,7 +68,7 @@ async def not_a_photo(message: Message) -> None:
 @router.callback_query(F.data.startswith("photos:"))
 async def show_photos(call: CallbackQuery, storage: Storage) -> None:
     project_id = int(call.data.split(":")[1])
-    project = await storage.get_project(project_id)
+    project = await storage.get_project(project_id, call.from_user.id)
     await call.answer()
 
     if not project or not project.photos:

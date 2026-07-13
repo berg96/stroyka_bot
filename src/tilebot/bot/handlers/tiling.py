@@ -296,8 +296,9 @@ async def got_waterproofing(
 
     materials = calc_materials(layout, waterproofing=waterproofing)
 
-    await storage.add_surface(
+    saved = await storage.add_surface(
         data["project_id"],
+        call.from_user.id,
         surface_to_payload(
             layout.surface,
             layout.tile,
@@ -306,6 +307,11 @@ async def got_waterproofing(
             waterproofing=waterproofing,
         ),
     )
+    if not saved:
+        await state.clear()
+        await call.message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
+        return
+
     await state.update_data(surface_no=data.get("surface_no", 0) + 1)
     await state.set_state(None)
 

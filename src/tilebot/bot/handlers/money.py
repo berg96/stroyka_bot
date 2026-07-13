@@ -55,7 +55,7 @@ def _card(project: Project) -> str:
 @router.callback_query(F.data.startswith("money:"))
 async def show_money(call: CallbackQuery, storage: Storage) -> None:
     project_id = int(call.data.split(":")[1])
-    project = await storage.get_project(project_id)
+    project = await storage.get_project(project_id, call.from_user.id)
     await call.answer()
     if not project:
         await call.message.answer("Объект не найден.")
@@ -71,7 +71,7 @@ async def ask_deal(call: CallbackQuery, state: FSMContext, storage: Storage) -> 
     await state.set_state(Money.deal)
     await call.answer()
 
-    project = await storage.get_project(project_id)
+    project = await storage.get_project(project_id, call.from_user.id)
     hint = ""
     if project and project.surfaces:
         hint = "\n\n<i>Если уже собрал смету — можно взять её итог.</i>"
@@ -88,10 +88,12 @@ async def set_deal(message: Message, state: FSMContext, storage: Storage) -> Non
         return
 
     data = await state.get_data()
-    await storage.set_deal_amount(data["project_id"], amount)
     await state.clear()
+    if not await storage.set_deal_amount(data["project_id"], message.from_user.id, amount):
+        await message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
+        return
 
-    project = await storage.get_project(data["project_id"])
+    project = await storage.get_project(data["project_id"], message.from_user.id)
     await message.answer(_card(project), reply_markup=kb.money_actions(project.id))
 
 
@@ -118,10 +120,12 @@ async def add_payment(message: Message, state: FSMContext, storage: Storage) -> 
         return
 
     data = await state.get_data()
-    await storage.add_payment(data["project_id"], amount, comment)
     await state.clear()
+    if not await storage.add_payment(data["project_id"], message.from_user.id, amount, comment):
+        await message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
+        return
 
-    project = await storage.get_project(data["project_id"])
+    project = await storage.get_project(data["project_id"], message.from_user.id)
     head = f"Записал: <b>{money(amount)}</b>" + (f" — {comment}" if comment else "")
     await message.answer(
         f"{head}\n\n{_card(project)}", reply_markup=kb.money_actions(project.id)

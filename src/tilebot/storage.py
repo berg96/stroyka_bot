@@ -248,10 +248,13 @@ class Storage:
             await s.refresh(project)
             return project
 
-    async def add_surface(self, project_id: int, payload: str) -> None:
+    async def add_surface(self, project_id: int, tg_id: int, payload: str) -> bool:
+        if not await self.owns(project_id, tg_id):
+            return False
         async with self.session() as s:
             s.add(SurfaceRow(project_id=project_id, payload_json=payload))
             await s.commit()
+        return True
 
     _LOADED = (
         selectinload(Project.surfaces),
@@ -259,12 +262,27 @@ class Storage:
         selectinload(Project.photos),
     )
 
-    async def get_project(self, project_id: int) -> Project | None:
+    async def get_project(self, project_id: int, tg_id: int) -> Project | None:
+        """Объект по id — только если он принадлежит этому мастеру.
+
+        project_id приходит из callback_data, то есть из клиента: чужой номер
+        подставить ничего не стоит. Поэтому владельца проверяем в самом запросе, а
+        не полагаемся на то, что кнопку с чужим объектом никому не присылали.
+        """
         async with self.session() as s:
             result = await s.execute(
-                select(Project).where(Project.id == project_id).options(*self._LOADED)
+                select(Project)
+                .where(Project.id == project_id, Project.user_id == tg_id)
+                .options(*self._LOADED)
             )
             return result.scalar_one_or_none()
+
+    async def owns(self, project_id: int, tg_id: int) -> bool:
+        async with self.session() as s:
+            result = await s.execute(
+                select(Project.id).where(Project.id == project_id, Project.user_id == tg_id)
+            )
+            return result.scalar_one_or_none() is not None
 
     async def list_projects(self, tg_id: int, limit: int = 10) -> list[Project]:
         async with self.session() as s:
@@ -277,26 +295,40 @@ class Storage:
             )
             return list(result.scalars())
 
-    async def set_deal_amount(self, project_id: int, amount: float) -> None:
+    async def set_deal_amount(self, project_id: int, tg_id: int, amount: float) -> bool:
         async with self.session() as s:
             project = await s.get(Project, project_id)
-            if project:
-                project.deal_amount = amount
-                await s.commit()
+            if project is None or project.user_id != tg_id:
+                return False
+            project.deal_amount = amount
+            await s.commit()
+        return True
 
-    async def add_payment(self, project_id: int, amount: float, comment: str = "") -> None:
+    async def add_payment(
+        self, project_id: int, tg_id: int, amount: float, comment: str = ""
+    ) -> bool:
+        if not await self.owns(project_id, tg_id):
+            return False
         async with self.session() as s:
             s.add(Payment(project_id=project_id, amount=amount, comment=comment[:128]))
             await s.commit()
+        return True
 
-    async def add_photo(self, project_id: int, file_id: str, caption: str = "") -> None:
+    async def add_photo(
+        self, project_id: int, tg_id: int, file_id: str, caption: str = ""
+    ) -> bool:
+        if not await self.owns(project_id, tg_id):
+            return False
         async with self.session() as s:
             s.add(Photo(project_id=project_id, file_id=file_id, caption=caption[:200]))
             await s.commit()
+        return True
 
-    async def delete_project(self, project_id: int) -> None:
+    async def delete_project(self, project_id: int, tg_id: int) -> bool:
         async with self.session() as s:
             project = await s.get(Project, project_id)
-            if project:
-                await s.delete(project)
-                await s.commit()
+            if project is None or project.user_id != tg_id:
+                return False
+            await s.delete(project)
+            await s.commit()
+        return True
