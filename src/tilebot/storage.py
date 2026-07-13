@@ -6,16 +6,29 @@
 """
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, func, select
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Float,
+    ForeignKey,
+    String,
+    Text,
+    func,
+    select,
+    text,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, selectinload
 
 from tilebot.core.estimate import PriceList
 from tilebot.core.models import LayoutPattern, Opening, StartFrom, Surface, SurfaceKind, Tile
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -51,12 +64,64 @@ class Project(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"))
     title: Mapped[str] = mapped_column(String(128))
+    # Сумма, о которой договорились с заказчиком. 0 — не договорились/не записал.
+    deal_amount: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped[User] = relationship(back_populates="projects")
     surfaces: Mapped[list["SurfaceRow"]] = relationship(
         back_populates="project", cascade="all, delete-orphan", lazy="selectin"
     )
+    payments: Mapped[list["Payment"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", lazy="selectin"
+    )
+    photos: Mapped[list["Photo"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    @property
+    def paid(self) -> float:
+        return sum(p.amount for p in self.payments)
+
+    @property
+    def due(self) -> float:
+        """Сколько заказчик ещё должен. Отрицательного долга не бывает — это переплата."""
+        return max(0.0, self.deal_amount - self.paid)
+
+
+class Payment(Base):
+    """Приход по объекту: аванс, промежуточный платёж, расчёт.
+
+    Форумы мастеров сходятся в одном: заказчик пропадает или «забывает» доплатить.
+    Записанный аванс и остаток — это то, что мастер иначе держит в голове.
+    """
+
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    amount: Mapped[float] = mapped_column(Float)
+    comment: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped[Project] = relationship(back_populates="payments")
+
+
+class Photo(Base):
+    """Фото объекта: основание «до», процесс, результат.
+
+    Храним file_id — файл лежит у Telegram, качать и хранить его самим незачем.
+    """
+
+    __tablename__ = "photos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    file_id: Mapped[str] = mapped_column(String(256))
+    caption: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped[Project] = relationship(back_populates="photos")
 
 
 class SurfaceRow(Base):
@@ -143,7 +208,17 @@ class Storage:
 
     async def init(self) -> None:
         async with self._engine.begin() as conn:
+            # Новые таблицы создаются сами, а вот колонку в уже существующую таблицу
+            # create_all не добавит — накатываем такие правки руками.
             await conn.run_sync(Base.metadata.create_all)
+
+            existing = await conn.execute(text("PRAGMA table_info(projects)"))
+            columns = {row[1] for row in existing}
+            if "deal_amount" not in columns:
+                await conn.execute(
+                    text("ALTER TABLE projects ADD COLUMN deal_amount FLOAT DEFAULT 0.0")
+                )
+                logger.info("Миграция: projects.deal_amount добавлена")
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
@@ -178,12 +253,16 @@ class Storage:
             s.add(SurfaceRow(project_id=project_id, payload_json=payload))
             await s.commit()
 
+    _LOADED = (
+        selectinload(Project.surfaces),
+        selectinload(Project.payments),
+        selectinload(Project.photos),
+    )
+
     async def get_project(self, project_id: int) -> Project | None:
         async with self.session() as s:
             result = await s.execute(
-                select(Project)
-                .where(Project.id == project_id)
-                .options(selectinload(Project.surfaces))
+                select(Project).where(Project.id == project_id).options(*self._LOADED)
             )
             return result.scalar_one_or_none()
 
@@ -194,9 +273,26 @@ class Storage:
                 .where(Project.user_id == tg_id)
                 .order_by(Project.created_at.desc())
                 .limit(limit)
-                .options(selectinload(Project.surfaces))
+                .options(*self._LOADED)
             )
             return list(result.scalars())
+
+    async def set_deal_amount(self, project_id: int, amount: float) -> None:
+        async with self.session() as s:
+            project = await s.get(Project, project_id)
+            if project:
+                project.deal_amount = amount
+                await s.commit()
+
+    async def add_payment(self, project_id: int, amount: float, comment: str = "") -> None:
+        async with self.session() as s:
+            s.add(Payment(project_id=project_id, amount=amount, comment=comment[:128]))
+            await s.commit()
+
+    async def add_photo(self, project_id: int, file_id: str, caption: str = "") -> None:
+        async with self.session() as s:
+            s.add(Photo(project_id=project_id, file_id=file_id, caption=caption[:200]))
+            await s.commit()
 
     async def delete_project(self, project_id: int) -> None:
         async with self.session() as s:

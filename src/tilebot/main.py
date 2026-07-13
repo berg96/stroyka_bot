@@ -11,7 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import CallbackQuery, ErrorEvent, Message, TelegramObject
 
-from tilebot.bot.handlers import area, price, projects, start, tiling
+from tilebot.bot.handlers import area, money, photos, price, projects, start, tiling
 from tilebot.config import get_settings
 from tilebot.storage import Storage
 
@@ -67,7 +67,15 @@ async def main() -> None:
     dp = Dispatcher()
     dp.update.middleware(StorageMiddleware(storage))
     dp.errors.register(on_error)
-    dp.include_routers(start.router, area.router, projects.router, price.router, tiling.router)
+    dp.include_routers(
+        start.router,
+        area.router,
+        projects.router,
+        money.router,
+        photos.router,
+        price.router,
+        tiling.router,
+    )
 
     me = await bot.get_me()
     logger.info("Бот @%s запущен", me.username)

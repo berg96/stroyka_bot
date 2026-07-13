@@ -13,7 +13,8 @@ from tilebot.core.models import LayoutPattern, StartFrom
 MAIN_MENU = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🧱 Плитка"), KeyboardButton(text="📐 Площадь")],
-        [KeyboardButton(text="📋 Мои объекты"), KeyboardButton(text="💰 Прайс")],
+        [KeyboardButton(text="📋 Мои объекты"), KeyboardButton(text="💵 Долги")],
+        [KeyboardButton(text="💰 Прайс")],
     ],
     resize_keyboard=True,
     input_field_placeholder="Выбери, что считаем",
@@ -89,8 +90,20 @@ def project_actions(project_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="🧾 Итог по объекту", callback_data=f"summary:{project_id}")
     b.button(text="💵 Смета заказчику", callback_data=f"estimate:{project_id}")
+    b.button(text="💰 Деньги", callback_data=f"money:{project_id}")
+    b.button(text="📷 Фото", callback_data=f"photos:{project_id}")
     b.button(text="➕ Добавить поверхность", callback_data=f"add_surface:{project_id}")
     b.button(text="🗑 Удалить объект", callback_data=f"delete:{project_id}")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def money_actions(project_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="➕ Записать платёж", callback_data=f"addpay:{project_id}")
+    b.button(text="✏️ Сумма договора", callback_data=f"setdeal:{project_id}")
+    b.button(text="📷 Фото объекта", callback_data=f"addphoto:{project_id}")
+    b.button(text="⬅️ К объекту", callback_data=f"open:{project_id}")
     b.adjust(1)
     return b.as_markup()
 

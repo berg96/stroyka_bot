@@ -1,7 +1,15 @@
 import pytest
 
 from tilebot.bot.handlers.tiling import _parse_openings
-from tilebot.bot.parse import ParseError, dimensions, meters, name_and_numbers, numbers, to_mm
+from tilebot.bot.parse import (
+    ParseError,
+    amount_and_comment,
+    dimensions,
+    meters,
+    name_and_numbers,
+    numbers,
+    to_mm,
+)
 
 
 class TestNumbers:
@@ -76,3 +84,28 @@ class TestOpenings:
     def test_negative_offset_is_rejected(self):
         with pytest.raises(ParseError, match="отрицательным"):
             _parse_openings("дверь 0.8 2.1 от -1 0")
+
+
+class TestPayments:
+    def test_amount_first(self):
+        assert amount_and_comment("30000 аванс") == (30000.0, "аванс")
+
+    def test_comment_first(self):
+        assert amount_and_comment("аванс 30000") == (30000.0, "аванс")
+
+    def test_bare_amount(self):
+        assert amount_and_comment("25000") == (25000.0, "")
+
+    def test_comment_on_both_sides(self):
+        assert amount_and_comment("получил 15000 наличкой") == (15000.0, "получил наличкой")
+
+    def test_decimal_comma(self):
+        assert amount_and_comment("1500,50 остаток") == (1500.5, "остаток")
+
+    def test_no_amount(self):
+        with pytest.raises(ParseError, match="суммы"):
+            amount_and_comment("аванс")
+
+    def test_zero_payment_is_rejected(self):
+        with pytest.raises(ParseError, match="больше нуля"):
+            amount_and_comment("0 аванс")

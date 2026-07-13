@@ -81,6 +81,27 @@ def name_and_numbers(line: str) -> tuple[str, list[float]]:
     return head.strip(" -−:"), numbers(rest)
 
 
+_FIRST_NUMBER = re.compile(r"-?\d+(?:[.,]\d+)?")
+
+
+def amount_and_comment(text: str) -> tuple[float, str]:
+    """«30000 аванс» и «аванс 30000» → (30000.0, "аванс").
+
+    Сумма — первое число в строке, комментарий — всё остальное.
+    """
+    match = _FIRST_NUMBER.search(text or "")
+    if not match:
+        raise ParseError("Не вижу суммы.")
+
+    amount = _one(match.group())
+    if amount <= 0:
+        raise ParseError("Сумма должна быть больше нуля.")
+
+    rest = text[: match.start()] + " " + text[match.end() :]
+    comment = " ".join(rest.split()).strip(" -—:,.")
+    return amount, comment
+
+
 def single_number(text: str, *, minimum: float = 0.0, maximum: float | None = None) -> float:
     """Одно число без пересчёта единиц: шов, толщина, процент, цена."""
     values = numbers(text)

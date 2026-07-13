@@ -63,10 +63,17 @@ async def open_project(call: CallbackQuery, storage: Storage) -> None:
         await call.message.answer("Объект не найден.")
         return
 
-    await call.message.answer(
-        f"<b>{project.title}</b>\nПоверхностей: {len(project.surfaces)}",
-        reply_markup=kb.project_actions(project_id),
-    )
+    lines = [f"<b>{project.title}</b>", f"Поверхностей: {len(project.surfaces)}"]
+    if project.photos:
+        lines.append(f"Фото: {len(project.photos)}")
+    if project.deal_amount:
+        lines.append(f"Договор: {money(project.deal_amount)} · получено {money(project.paid)}")
+        if project.due > 0:
+            lines.append(f"<b>Остаток с заказчика: {money(project.due)}</b>")
+        else:
+            lines.append("✅ Рассчитались")
+
+    await call.message.answer("\n".join(lines), reply_markup=kb.project_actions(project_id))
 
 
 @router.callback_query(F.data.startswith("summary:"))
