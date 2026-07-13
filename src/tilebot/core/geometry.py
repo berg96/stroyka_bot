@@ -8,11 +8,14 @@
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 class GeometryError(ValueError):
     """Замеры не сходятся — из таких сторон фигуру не собрать."""
+
+
+Point = tuple[float, float]
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,50 @@ class AreaResult:
     perimeter_m: float
     method: str
     note: str = ""
+    # Вершины фигуры в метрах — чтобы показать мастеру, что именно посчитали.
+    # Пусто, если фигуру по замерам не восстановить (составная комната).
+    vertices: list[Point] = field(default_factory=list)
+
+
+def shoelace_area(points: list[Point]) -> float:
+    """Площадь многоугольника по координатам вершин."""
+    n = len(points)
+    if n < 3:
+        return 0.0
+    total = 0.0
+    for i in range(n):
+        x1, y1 = points[i]
+        x2, y2 = points[(i + 1) % n]
+        total += x1 * y2 - x2 * y1
+    return abs(total) / 2
+
+
+def _third_vertex(origin: Point, prev: Point, from_origin: float, from_prev: float) -> Point:
+    """Вершина на заданных расстояниях от двух известных точек.
+
+    Пересечение двух окружностей. Из двух решений берём то, что лежит слева от
+    луча origin→prev: так обход идёт против часовой и фигура не выворачивается.
+    """
+    ox, oy = origin
+    px, py = prev
+    dx, dy = px - ox, py - oy
+    d = math.hypot(dx, dy)
+    if d <= 1e-9:
+        raise GeometryError("Замеры не сходятся — точки совпали.")
+
+    # Классическое пересечение окружностей радиусов from_origin и from_prev.
+    a = (from_origin**2 - from_prev**2 + d**2) / (2 * d)
+    h_sq = from_origin**2 - a**2
+    if h_sq < -1e-6:
+        raise GeometryError(
+            "Замеры не сходятся: с такими сторонами и диагоналями фигура не "
+            "собирается. Перемерь диагонали."
+        )
+    h = math.sqrt(max(0.0, h_sq))
+
+    mx, my = ox + a * dx / d, oy + a * dy / d
+    # Нормаль к origin→prev; знак выбираем так, чтобы вершина ушла влево.
+    return (mx - h * dy / d, my + h * dx / d)
 
 
 def _heron(a: float, b: float, c: float) -> float:
@@ -39,6 +86,22 @@ def _heron(a: float, b: float, c: float) -> float:
     return math.sqrt(max(0.0, s * (s - a) * (s - b) * (s - c)))
 
 
+def fan_vertices(sides: list[float], diagonals: list[float]) -> list[Point]:
+    """Координаты вершин по сторонам и диагоналям из первой вершины.
+
+    Первую сторону кладём на ось X, дальше каждую следующую вершину находим по
+    двум расстояниям: до первой вершины (диагональ) и до предыдущей (сторона).
+    """
+    n = len(sides)
+    points: list[Point] = [(0.0, 0.0), (sides[0], 0.0)]
+    chords = [*diagonals, sides[n - 1]]  # до последней вершины «диагональ» = замыкающая сторона
+
+    for i in range(1, n - 1):
+        points.append(_third_vertex(points[0], points[i], chords[i - 1], sides[i]))
+
+    return points
+
+
 def rectangle(width_m: float, length_m: float) -> AreaResult:
     if width_m <= 0 or length_m <= 0:
         raise GeometryError("Стороны должны быть больше нуля.")
@@ -46,14 +109,17 @@ def rectangle(width_m: float, length_m: float) -> AreaResult:
         area_m2=width_m * length_m,
         perimeter_m=2 * (width_m + length_m),
         method="прямоугольник",
+        vertices=[(0.0, 0.0), (width_m, 0.0), (width_m, length_m), (0.0, length_m)],
     )
 
 
 def triangle(a: float, b: float, c: float) -> AreaResult:
+    area = _heron(a, b, c)
     return AreaResult(
-        area_m2=_heron(a, b, c),
+        area_m2=area,
         perimeter_m=a + b + c,
         method="треугольник (Герон)",
+        vertices=fan_vertices([a, b, c], []),
     )
 
 
@@ -71,6 +137,7 @@ def quadrilateral(a: float, b: float, c: float, d: float, diagonal: float) -> Ar
         perimeter_m=a + b + c + d,
         method="четырёхугольник (2 треугольника по диагонали)",
         note=f"Треугольники {t1:.2f} + {t2:.2f} м²",
+        vertices=fan_vertices([a, b, c, d], [diagonal]),
     )
 
 
@@ -111,6 +178,7 @@ def polygon_fan(sides: list[float], diagonals: list[float]) -> AreaResult:
         perimeter_m=sum(sides),
         method=f"многоугольник {n} сторон (веер из {n - 2} треугольников)",
         note=" + ".join(f"{p:.2f}" for p in parts) + " м²",
+        vertices=fan_vertices(sides, diagonals),
     )
 
 

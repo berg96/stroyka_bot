@@ -8,7 +8,7 @@
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from tilebot.bot import keyboards as kb
 from tilebot.bot.parse import ParseError, meters, name_and_numbers
@@ -22,6 +22,7 @@ from tilebot.core.geometry import (
     rectangle,
     triangle,
 )
+from tilebot.render.shape import render_parts, render_shape
 
 router = Router(name="area")
 
@@ -85,19 +86,38 @@ async def pick_shape(call: CallbackQuery, state: FSMContext) -> None:
         )
 
 
-def _reply(result: AreaResult) -> str:
+def _reply(result: AreaResult, *, with_scheme: bool) -> str:
     lines = [f"<b>Площадь: {result.area_m2:.2f} м²</b>", f"<i>{result.method}</i>"]
     if result.perimeter_m:
         lines.append(f"Периметр: {result.perimeter_m:.2f} м")
     if result.note:
         lines.append(f"\n{result.note}")
+    if with_scheme:
+        lines.append("\n👆 Сверь фигуру со схемой: так ли стоят стены?")
     lines.append("\n💡 Плитку на эту площадь посчитаю в разделе <b>🧱 Плитка</b>.")
     return "\n".join(lines)
 
 
-async def _answer(message: Message, state: FSMContext, result: AreaResult) -> None:
+async def _answer(
+    message: Message,
+    state: FSMContext,
+    result: AreaResult,
+    parts: list[Part] | None = None,
+) -> None:
+    """Ответить площадью и схемой обмера — чтобы мастер увидел, ту ли фигуру посчитали."""
     await state.clear()
-    await message.answer(_reply(result), reply_markup=kb.MAIN_MENU)
+
+    png = render_parts(parts, result) if parts else render_shape(result)
+    caption = _reply(result, with_scheme=png is not None)
+
+    if png:
+        await message.answer_photo(
+            BufferedInputFile(png, filename="shape.png"),
+            caption=caption,
+            reply_markup=kb.MAIN_MENU,
+        )
+    else:
+        await message.answer(caption, reply_markup=kb.MAIN_MENU)
 
 
 @router.message(Area.rect)
@@ -187,6 +207,6 @@ async def calc_composite(message: Message, state: FSMContext) -> None:
                     or raw.strip().startswith(("-", "−")),
                 )
             )
-        await _answer(message, state, composite(parts))
+        await _answer(message, state, composite(parts), parts=parts)
     except (ParseError, GeometryError) as e:
         await message.answer(f"{e}\n\nПример:\n<code>кухня 4 3\nминус короб 0.4 0.6</code>")

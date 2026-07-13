@@ -9,6 +9,7 @@ from tilebot.core.geometry import (
     polygon_fan,
     quadrilateral,
     rectangle,
+    shoelace_area,
     triangle,
 )
 from tilebot.core.layout import best_orientation, build_layout
@@ -48,6 +49,31 @@ class TestGeometry:
         r = polygon_fan(s, d)
         assert r.area_m2 == pytest.approx(16, rel=1e-6)
         assert r.perimeter_m == pytest.approx(sum(s))
+
+    def test_vertices_match_the_computed_area(self):
+        # Схему рисуем по восстановленным вершинам. Если они врут, мастер увидит не
+        # ту фигуру — поэтому площадь по вершинам обязана сойтись с расчётной.
+        cases = [
+            rectangle(4, 3),
+            triangle(3, 4, 5),
+            quadrilateral(4, 3, 4, 3, 5),
+            quadrilateral(3, 3, 3, 3, 3 * math.sqrt(2)),
+            polygon_fan([4, 3, math.hypot(2, 2), math.hypot(2, 2), 3], [5, math.hypot(2, 5)]),
+        ]
+        for result in cases:
+            assert len(result.vertices) >= 3
+            assert shoelace_area(result.vertices) == pytest.approx(result.area_m2, rel=1e-6)
+
+    def test_rectangle_by_diagonal_is_reconstructed_square(self):
+        # Прямоугольник 3×4 по диагонали 5 — вершины должны встать под прямым углом.
+        r = quadrilateral(3, 4, 3, 4, 5)
+        assert r.vertices[0] == pytest.approx((0, 0))
+        assert r.vertices[2] == pytest.approx((3, 4))
+
+    def test_impossible_diagonal_is_reported(self):
+        # Диагональ длиннее суммы сторон — фигура не собирается.
+        with pytest.raises(GeometryError):
+            quadrilateral(3, 4, 3, 4, 20)
 
     def test_composite_l_shaped_room(self):
         # Г-образная кухня: 4×3 плюс 2×2, минус короб 0.5×0.5.
