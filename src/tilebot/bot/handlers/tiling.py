@@ -696,6 +696,40 @@ async def _redraw(message: Message, user_id: int, storage: Storage, project_id: 
 # --- Фото плитки и цвет затирки ----------------------------------------------
 
 
+@router.callback_query(F.data.startswith("restart:"))
+async def ask_restart(call: CallbackQuery, storage: Storage) -> None:
+    project_id = int(call.data.split(":")[1])
+    project = await storage.get_project(project_id, call.from_user.id)
+    if project is None or not project.surfaces:
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    current = payload_to_surface(project.surfaces[0].dump()).start_from
+    await call.answer()
+    await call.message.answer(
+        "Откуда ведём ряд?\n\n"
+        "<i>От угла — целая плитка в углу, вся подрезка уходит в другой край. "
+        "От центра — подрезка делится поровну на два края, смотрится аккуратнее.</i>",
+        reply_markup=kb.restart_from(project_id, current),
+    )
+
+
+@router.callback_query(F.data.startswith("setstart:"))
+async def set_start(call: CallbackQuery, storage: Storage) -> None:
+    _, raw_id, start = call.data.split(":")
+    project_id = int(raw_id)
+
+    # «Реши сам» перебирает старты при каждом пересчёте, поэтому в базе держим
+    # обычный старт — иначе кнопка-галочка показывала бы не то, что легло.
+    stored = StartFrom.EDGE.value if start == "auto" else start
+    if not await storage.update_project_surfaces(project_id, call.from_user.id, start_from=stored):
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    await call.answer("Пересчитал")
+    await _redraw(call.message, call.from_user.id, storage, project_id)
+
+
 @router.callback_query(F.data.startswith("schemes:"))
 async def show_schemes(call: CallbackQuery, storage: Storage) -> None:
     """Схемы раскладки по объекту — со всем, что мастер уже настроил."""

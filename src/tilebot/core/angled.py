@@ -19,6 +19,12 @@ Point = tuple[float, float]
 # а вот «плитка вылезла на 1e-9» — ложная подрезка.
 EPS = 1e-6
 
+# Кусок меньше этой доли плитки — не подрезка, а огрызок: его не режут и не кладут.
+SCRAP_FRACTION = 0.02
+# Срезано меньше этой доли — считаем плитку целой: иначе плитка, у которой сняли
+# полтора миллиметра, показывается мастеру как «резаная», хотя резать там нечего.
+WHOLE_FRACTION = 0.995
+
 
 @dataclass(frozen=True)
 class Piece:
@@ -147,8 +153,13 @@ def angled_pieces(
     *,
     herringbone: bool = False,
     angle_deg: float = 45.0,
+    keep_scraps: bool = False,
 ) -> list[Piece]:
-    """Разложить стену раскладкой под углом и обрезать всё лишнее по её краям."""
+    """Разложить стену раскладкой под углом и обрезать всё лишнее по её краям.
+
+    keep_scraps — оставить и те огрызки, которые в жизни не кладут: нужно только
+    затем, чтобы проверить замощение, что куски сходятся в площадь стены.
+    """
     if surface_w <= 0 or surface_h <= 0 or tile_w <= 0 or tile_h <= 0:
         return []
 
@@ -172,8 +183,22 @@ def angled_pieces(
         area = polygon_area(clipped)
         if area <= EPS:
             continue  # плитка целиком за стеной
+
+        if not keep_scraps and area < full_area * SCRAP_FRACTION:
+            # Огрызок с ноготь: такую полоску не режут и не клеят — у стены её
+            # съедает шов или герметик. В закупку она попадать не должна, иначе
+            # мастер купит лишнюю плитку ради пылинки на краю.
+            continue
+
         pieces.append(
-            Piece(polygon=clipped, area_mm2=area, is_cut=area < full_area - 1.0)
+            Piece(
+                polygon=clipped,
+                area_mm2=area,
+                # Срезали меньше волоса — плитка целая: у 45° край стены почти
+                # никогда не совпадает с сеткой идеально, и без допуска добрая
+                # половина стены красилась бы «подрезкой».
+                is_cut=area < full_area * WHOLE_FRACTION,
+            )
         )
 
     return pieces

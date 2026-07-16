@@ -139,6 +139,7 @@ def after_surface(project_id: int) -> InlineKeyboardMarkup:
     """Что делать, когда поверхность посчитана."""
     b = InlineKeyboardBuilder()
     b.button(text="🔀 Сменить раскладку", callback_data=f"repat:{project_id}")
+    b.button(text="↔️ Начало ряда", callback_data=f"restart:{project_id}")
     b.button(text="🔄 Повернуть плитку", callback_data=f"rotate:{project_id}")
     b.button(text="🖼 Фото плитки", callback_data=f"tilephoto:{project_id}")
     b.button(text="🎨 Цвет затирки", callback_data=f"grout:{project_id}")
@@ -161,6 +162,21 @@ def grout_colors(project_id: int, current: str | None) -> InlineKeyboardMarkup:
         b.button(text=f"{title}{mark}", callback_data=f"setgrout:{project_id}:{key}")
     b.button(text="⬅️ Назад", callback_data=f"open:{project_id}")
     b.adjust(2, 2, 1, 1)
+    return b.as_markup()
+
+
+def restart_from(project_id: int, current: StartFrom | None) -> InlineKeyboardMarkup:
+    """Откуда вести ряд. Меняется после расчёта — посмотреть, где ляжет подрезка."""
+    b = InlineKeyboardBuilder()
+    for value, title in (
+        (StartFrom.EDGE.value, "От угла"),
+        (StartFrom.CENTER.value, "От центра"),
+        ("auto", "Реши сам"),
+    ):
+        mark = " ✓" if current is not None and value == current.value else ""
+        b.button(text=f"{title}{mark}", callback_data=f"setstart:{project_id}:{value}")
+    b.button(text="⬅️ Назад", callback_data=f"open:{project_id}")
+    b.adjust(2, 1, 1)
     return b.as_markup()
 
 

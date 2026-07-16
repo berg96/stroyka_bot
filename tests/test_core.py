@@ -4,7 +4,7 @@ import math
 import pytest
 from PIL import Image
 
-from tilebot.core.angled import angled_pieces
+from tilebot.core.angled import angled_pieces, polygon_area
 from tilebot.core.estimate import PriceList, rough_material_cost, tile_paid_area_m2
 from tilebot.core.geometry import (
     GeometryError,
@@ -446,9 +446,35 @@ class TestAngled:
     def test_angled_covers_the_wall_without_gaps_or_overlaps(self):
         """Замощение: куски обязаны сойтись в площадь стены — без дыр и нахлёстов."""
         for herringbone in (False, True):
-            pieces = angled_pieces(2000, 2700, 600, 300, 0.0, herringbone=herringbone)
+            pieces = angled_pieces(
+                2000, 2700, 600, 300, 0.0, herringbone=herringbone, keep_scraps=True
+            )
             total = sum(p.area_mm2 for p in pieces)
             assert total == pytest.approx(2000 * 2700, rel=1e-3)
+
+    def test_scraps_are_not_bought(self):
+        """Огрызок в доли процента плитки — не подрезка, а мусор на краю.
+
+        Он не кладётся, но в закупку попадал целой плиткой — мастер купил бы лишнее.
+        """
+        for herringbone in (False, True):
+            kw = {"herringbone": herringbone}
+            kept = angled_pieces(2000, 2700, 600, 300, 2.0, **kw)
+            raw = angled_pieces(2000, 2700, 600, 300, 2.0, keep_scraps=True, **kw)
+
+            assert len(kept) < len(raw), "огрызки не отброшены"
+            smallest = min(p.area_mm2 for p in kept) / (600 * 300)
+            assert smallest >= 0.02, f"в закупку попал огрызок в {smallest:.1%} плитки"
+
+    def test_almost_whole_tile_is_not_called_a_cut(self):
+        """Плитка, у которой сняли волос, — целая: у 45° край почти никогда не по сетке."""
+        for pattern in (LayoutPattern.DIAGONAL, LayoutPattern.HERRINGBONE):
+            lay = self._wall(pattern)
+            for cell in lay.cells:
+                if not cell.is_cut:
+                    continue
+                fraction = polygon_area(cell.polygon) / (600 * 300)
+                assert fraction < 0.995, "почти целая плитка помечена как резаная"
 
     def test_angled_cuts_the_whole_perimeter(self):
         """У 45° режется весь периметр — прямая укладка режет только два края."""

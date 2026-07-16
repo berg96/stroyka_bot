@@ -243,6 +243,34 @@ def render_layout(
         anchor="rm",
     )
 
+    _legend(d, ch, f_small, has_cuts=any(c.is_cut for c in layout.cells), photo=tile_photo)
+
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+def _legend(
+    d: ImageDraw.ImageDraw,
+    canvas_h: int,
+    font: ImageFont.FreeTypeFont,
+    *,
+    has_cuts: bool,
+    photo: Image.Image | None,
+) -> None:
+    """Что тут какого цвета. Без этого мастер гадает, почему часть плиток оранжевая."""
+    x, y = MARGIN, canvas_h - 24
+    box = 13
+
+    def swatch(fill, edge, text: str) -> None:
+        nonlocal x
+        d.rectangle([x, y - box // 2, x + box, y + box // 2], fill=fill, outline=edge, width=1)
+        x += box + 6
+        d.text((x, y), text, fill=MUTED, font=font, anchor="lm")
+        x += int(d.textlength(text, font=font)) + 18
+
+    if photo is None:
+        swatch(TILE_FILL, TILE_EDGE, "целая плитка")
+    if has_cuts:
+        swatch(CUT_FILL if photo is None else None, CUT_EDGE, "резать")
+        d.text((x, y), "оранжевым — ширина подрезки, мм", fill=MUTED, font=font, anchor="lm")
