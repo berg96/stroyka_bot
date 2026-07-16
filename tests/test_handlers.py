@@ -5,6 +5,8 @@ callback_data, ввод, который бот молча понял не так
 замечаний по первой версии.
 """
 
+import re
+
 
 class TestJoint:
     async def test_fractional_joint_survives_the_whole_flow(self, app):
@@ -514,3 +516,100 @@ def _work_total(app) -> int:
     line = [t for t in app.texts if "РАБОТА:" in t][-1]
     row = next(x for x in line.splitlines() if "РАБОТА:" in x)
     return int("".join(ch for ch in row if ch.isdigit()))
+
+
+class TestEconomyWrap:
+    """Саня, голосовое 16.07: «от угла ведёт целую плитку и подрезку — огромный
+    расход… можно ли, чтобы от целой отрезал 798 и от неё от угла прошло
+    продолжение дальше — это безотходный вариант».
+    """
+
+    async def test_button_switches_room_to_the_band(self, app):
+        await _room_flow(app)
+        app.forget()
+
+        await app.click("Эконом: по кругу")
+
+        assert app.said("эконом по кругу"), "режим не показан в сводке"
+        assert app.said("Эконом сберёг"), "не сказал, сколько плиток сэкономил"
+        assert app.said("остатки плиток с прошлой стены"), "не объяснил, что за куски"
+        # Замеры вводили один раз — комната перерисовывается целиком.
+        assert app.photos_sent() == 5
+
+    async def test_economy_actually_buys_less_tile(self, app):
+        """Главное для мастера: закупка обязана уменьшиться, а не просто «режим включён»."""
+        await _room_flow(app)
+        before = _tile_qty(app.last_text)
+
+        app.forget()
+        await app.click("Эконом: по кругу")
+        after = _tile_qty(app.last_text)
+
+        assert after < before, f"плитки {before} → {after}: эконом не сэкономил"
+
+    async def test_switching_back_restores_the_normal_layout(self, app):
+        """Кнопка-обманка — худшее: обещали вернуть обычную, значит вернули."""
+        await _room_flow(app)
+        normal = _tile_qty(app.last_text)
+
+        await app.click("Эконом: по кругу")
+        app.forget()
+        await app.click("Вернуть обычную")
+
+        assert _tile_qty(app.last_text) == normal
+        assert not app.said("эконом по кругу")
+
+    async def test_single_wall_has_no_economy_button(self, app):
+        """На одной стене заворачивать за угол нечего — кнопки быть не должно."""
+        await app.send("🧱 Плитка")
+        await app.click("Одна стена или пол")
+        await app.send("Стена")
+        await app.click("Стена")
+        await app.send("2 2.7")
+        await app.send("60 30")
+        await app.send("2")
+        await app.click("9 мм")
+        await app.click("Пропустить")
+        await app.click("Шов в шов")
+        await app.click("От угла")
+        await app.click("7%")
+        await app.click("Не нужна")
+
+        assert app.find_button("Эконом") is None, "эконом предложен там, где он невозможен"
+
+    async def test_diagonal_drops_the_economy_button(self, app):
+        """Под 45° лента не считается — кнопку предлагать нельзя."""
+        await _room_flow(app)
+        await app.click("Сменить раскладку")
+        app.forget()
+        await app.click("Диагональ")
+
+        assert not any("Эконом" in t for t in app.last_markup_titles()), (
+            f"эконом предложен на диагонали: {app.last_markup_titles()}"
+        )
+
+    async def test_old_economy_button_on_diagonal_explains_itself(self, app):
+        """Кнопка из старой сводки в чате остаётся — нажатие не должно молча падать.
+
+        Мастер переключил комнату на диагональ, пролистал вверх и нажал «Эконом»
+        из прошлого сообщения: бот обязан объяснить, а не сломаться.
+        """
+        await _room_flow(app)
+        wrap_button = app.find_button("Эконом: по кругу")
+        assert wrap_button, "кнопки эконома нет — тест бессмысленен"
+
+        await app.click("Сменить раскладку")
+        await app.click("Диагональ")
+        app.forget()
+
+        await app.click_data(wrap_button)
+
+        assert app.said("Под 45° так не выйдет"), f"нет объяснения: {app.texts}"
+        assert not app.said("Эконом сберёг"), "посчитал ленту на диагонали"
+
+
+def _tile_qty(text: str) -> int:
+    """Сколько плитки бот велел купить — из строки «• Плитка 600×300: 44 шт»."""
+    m = re.search(r"Плитка \d+×\d+: <b>(\d+) шт", text)
+    assert m, f"в сводке нет строки плитки:\n{text}"
+    return int(m.group(1))

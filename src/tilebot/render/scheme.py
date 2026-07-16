@@ -23,6 +23,11 @@ TILE_FILL = (226, 232, 240)
 TILE_EDGE = (148, 163, 184)
 CUT_FILL = (254, 215, 170)
 CUT_EDGE = (234, 138, 47)
+# Кусок, приехавший из-за угла (эконом-раскладка): его не надо покупать и не надо
+# резать заново — он уже лежит в руках. Отдельный цвет, иначе мастер видит просто
+# ещё одну оранжевую подрезку и считает её новой плиткой.
+WRAP_FILL = (187, 231, 199)
+WRAP_EDGE = (52, 140, 90)
 OPENING_FILL = (203, 213, 225)
 OPENING_EDGE = (100, 116, 139)
 TEXT = (30, 41, 59)
@@ -161,12 +166,14 @@ def render_layout(
                 d.rectangle(box, outline=CUT_EDGE, width=1)
             continue
 
-        d.rectangle(
-            box,
-            fill=CUT_FILL if cell.is_cut else TILE_FILL,
-            outline=CUT_EDGE if cell.is_cut else TILE_EDGE,
-            width=2,
-        )
+        from_corner = not cell.counts_as_tile
+        if from_corner:
+            fill, edge = WRAP_FILL, WRAP_EDGE
+        elif cell.is_cut:
+            fill, edge = CUT_FILL, CUT_EDGE
+        else:
+            fill, edge = TILE_FILL, TILE_EDGE
+        d.rectangle(box, fill=fill, outline=edge, width=2)
 
         # Ширину реза пишем на самой плитке: подрезка бывает и в середине ряда
         # (вразбежку), и почти целой (596 из 600) — без цифры мастер гадает, что
@@ -177,7 +184,7 @@ def render_layout(
                 d.text(
                     ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2),
                     label,
-                    fill=CUT_EDGE,
+                    fill=edge,
                     font=f_small,
                     anchor="mm",
                 )
@@ -214,9 +221,19 @@ def render_layout(
 
     head = title or surface.name
     d.text((MARGIN, 22), head, fill=TEXT, font=f_title, anchor="lm")
+    # «Плиток» и «кусков на схеме» — разные числа при эконом-раскладке: угловая
+    # плитка лежит на двух стенах. Мастер пересчитает куски по картинке, поэтому
+    # говорим оба числа, иначе схема спорит с подписью.
+    from_corner = sum(1 for c in layout.cells if not c.counts_as_tile)
+    counted = f"{layout.tiles_grid} шт, из них резаных {layout.cuts_count}"
+    if from_corner:
+        counted = (
+            f"{layout.tiles_grid} шт своих (резаных {layout.cuts_count}) "
+            f"+ {from_corner} с прошлой стены"
+        )
     sub = (
         f"плитка {tile.width_mm:.0f}×{tile.height_mm:.0f} мм · шов {fmt_mm(tile.joint_mm)} мм · "
-        f"{layout.tiles_grid} шт, из них резаных {layout.cuts_count}"
+        f"{counted}"
     )
     if grout:
         sub += f" · затирка {GROUT_COLORS[grout][0].lower()}"
@@ -257,7 +274,14 @@ def render_layout(
         anchor="rm",
     )
 
-    _legend(d, ch, f_small, has_cuts=any(c.is_cut for c in layout.cells), photo=tile_photo)
+    _legend(
+        d,
+        ch,
+        f_small,
+        has_cuts=any(c.is_cut for c in layout.cells),
+        photo=tile_photo,
+        has_wrapped=bool(from_corner),
+    )
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
@@ -271,6 +295,7 @@ def _legend(
     *,
     has_cuts: bool,
     photo: Image.Image | None,
+    has_wrapped: bool = False,
 ) -> None:
     """Что тут какого цвета. Без этого мастер гадает, почему часть плиток оранжевая."""
     x, y = MARGIN, canvas_h - 24
@@ -287,4 +312,7 @@ def _legend(
         swatch(TILE_FILL, TILE_EDGE, "целая плитка")
     if has_cuts:
         swatch(CUT_FILL if photo is None else None, CUT_EDGE, "резать")
-        d.text((x, y), "оранжевым — ширина подрезки, мм", fill=MUTED, font=font, anchor="lm")
+    if has_wrapped:
+        swatch(WRAP_FILL if photo is None else None, WRAP_EDGE, "остаток из-за угла")
+    if has_cuts:
+        d.text((x, y), "цифра — ширина куска, мм", fill=MUTED, font=font, anchor="lm")

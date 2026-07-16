@@ -17,7 +17,12 @@ from tilebot.core.geometry import (
     shoelace_area,
     triangle,
 )
-from tilebot.core.layout import best_orientation, build_layout, common_orientation
+from tilebot.core.layout import (
+    MIN_CUT_MM,
+    best_orientation,
+    build_layout,
+    common_orientation,
+)
 from tilebot.core.materials import (
     calc_materials,
     grout_kg_per_m2,
@@ -28,6 +33,7 @@ from tilebot.core.materials import (
 from tilebot.core.models import LayoutPattern, Opening, StartFrom, Surface, SurfaceKind, Tile
 from tilebot.core.room import floor_dims, room_surfaces
 from tilebot.core.units import fmt_mm
+from tilebot.core.wrap import supports_wrap, wrap_savings, wrap_wall_layouts
 from tilebot.render.scheme import _texture, grout_rgb, render_layout
 
 
@@ -613,3 +619,169 @@ class TestRowFitsTheWall:
             assert row[0].w == pytest.approx(row[-1].w, abs=0.51), (
                 f"стена {width}: края смещённого ряда {row[0].w:.0f} и {row[-1].w:.0f}"
             )
+
+
+class TestWrapAroundEconomy:
+    """Эконом-раскладка: лента по периметру, остаток плитки заворачивает за угол.
+
+    Голосовое Сани 16.07: «от угла начал, целую положил, потом от целой отрезал,
+    допустим 798, и от неё, от угла прошло продолжение дальше — это безотходный
+    вариант». Его комната со схемы: 2×2 м, h=2.7, плитка 1200×600, шов 1,5.
+    """
+
+    WALLS = [2000.0, 2000.0, 2000.0, 2000.0]
+    H = 2700.0
+    TILE = Tile(1200, 600, joint_mm=1.5, per_pack=2)
+
+    def _walls(self, widths=None, openings=None):
+        return [
+            Surface(
+                f"Стена {i}", w, self.H, openings=openings if i == 1 and openings else []
+            )
+            for i, w in enumerate(widths or self.WALLS, 1)
+        ]
+
+    def _lays(self, pattern=LayoutPattern.STRAIGHT, **kw):
+        return wrap_wall_layouts(self._walls(**kw), self.TILE, pattern)
+
+    def test_corner_tile_is_bought_once(self):
+        """Главное: плитка, разрезанная на углу, не должна попасть в закупку дважды.
+
+        Кусков на стенах больше, чем плиток — за это и платили бы второй раз.
+        """
+        lays = self._lays()
+        pieces = sum(len(lay.cells) for lay in lays)
+        tiles = sum(lay.tiles_grid for lay in lays)
+        assert pieces > tiles, "куски из-за угла не появились — лента не сработала"
+        assert tiles == 35, f"плиток на комнату {tiles}, ждали 35"
+
+    def test_saves_tiles_versus_per_wall(self):
+        """Ради чего всё: обычная раскладка жжёт треть закупки в огрызки."""
+        per_wall, banded = wrap_savings(self._walls(), self.TILE)
+        assert per_wall == 40
+        assert banded == 35
+        assert banded < per_wall
+
+    def test_first_wall_matches_sanya_scheme(self):
+        """Санина схема: в углу целая 1200, следом подрезка 798."""
+        row = sorted(
+            (c for c in self._lays()[0].cells if c.y < 1), key=lambda c: c.x
+        )
+        assert [round(c.w) for c in row] == [1200, 798]
+
+    def test_offcut_continues_on_next_wall(self):
+        """Остаток того же реза (1200 − 798 − пропил) открывает вторую стену."""
+        row = sorted(
+            (c for c in self._lays()[1].cells if c.y < 1), key=lambda c: c.x
+        )
+        first = row[0]
+        assert first.x == pytest.approx(0.0), "продолжение должно лечь прямо в угол"
+        assert round(first.w) == 402
+        assert not first.counts_as_tile, "остаток уже куплен на прошлой стене"
+        assert first.is_cut
+
+    def test_cut_is_billed_once_per_tile(self):
+        """Рез на углу один, а кусков два — смета не должна брать деньги дважды."""
+        for lay in self._lays():
+            billed = sum(1 for c in lay.cells if c.is_cut and c.counts_as_tile)
+            assert lay.cuts_count == billed
+            assert lay.cuts_count <= lay.tiles_grid
+
+    def test_purchase_is_cheaper(self):
+        """Смысл для мастера — в упаковках, а не в процентах."""
+        eco = merge_materials([calc_materials(lay, waste=0.07) for lay in self._lays()])
+        normal = merge_materials([
+            calc_materials(
+                build_layout(
+                    Surface(f"Стена {i}", w, self.H), self.TILE, LayoutPattern.STRAIGHT
+                ),
+                waste=0.07,
+            )
+            for i, w in enumerate(self.WALLS, 1)
+        ])
+        eco_tile = next(line for line in eco if line.kind == "tile")
+        normal_tile = next(line for line in normal if line.kind == "tile")
+        assert eco_tile.qty < normal_tile.qty
+        assert math.ceil(eco_tile.qty / 2) < math.ceil(normal_tile.qty / 2)
+
+    def test_walls_are_fully_covered(self):
+        """Дыр быть не должно: каждая точка стены под плиткой или под швом."""
+        for lay in self._lays():
+            covered = sum(c.w * c.h for c in lay.cells)
+            gross = lay.surface.width_mm * lay.surface.height_mm
+            assert covered / gross > 0.99, f"{lay.surface.name}: покрыто {covered / gross:.1%}"
+
+    def test_no_unglueable_slivers_from_corner(self):
+        """Кусок в пару миллиметров за угол не клеят — он крошится и вылетает.
+
+        Геометрия неслучайная: у Сани на третьем углу лента даёт кусок 6 мм, а
+        комната 2.4×2.4 — 1,5 / 4,5 / 7,5 мм на всех трёх углах. Раньше тест брал
+        стены, где огрызков не возникает вовсе, и проходил всегда.
+        """
+        for widths in (self.WALLS, [2400.0] * 4):
+            lays = self._lays(widths=widths)
+            from_corner = [c for lay in lays for c in lay.cells if not c.counts_as_tile]
+            for cell in from_corner:
+                assert cell.w >= MIN_CUT_MM, f"огрызок {cell.w:.1f} мм из-за угла"
+
+    def test_sliver_walls_still_get_whole_tiles(self):
+        """Выбросив огрызок, стена обязана начаться новой целой плиткой, а не дырой."""
+        lays = self._lays(widths=[2400.0] * 4)
+        for lay in lays:
+            row = sorted((c for c in lay.cells if c.y < 1), key=lambda c: c.x)
+            assert row, f"{lay.surface.name} осталась без плитки"
+            assert row[0].x < MIN_CUT_MM, f"{lay.surface.name}: дыра в углу {row[0].x:.1f} мм"
+
+    def test_no_lying_edge_labels(self):
+        """Ось ленты — не ось стены: подписывать ею край стены нельзя.
+
+        Схема брала x-ось ленты и писала над стеной 2 «791» (замыкающий кусок
+        всего периметра) там, где на самом деле лежит кусок 396.
+        """
+        for lay in self._lays():
+            assert lay.x.cut_start_mm == 0 and lay.x.cut_end_mm == 0, (
+                f"{lay.surface.name}: подпись края взята от ленты, а не от стены"
+            )
+            widths = {round(c.w) for c in lay.cells}
+            assert 791 not in widths or lay.surface.name == "Стена 4"
+
+    def test_brick_pattern_wraps_too(self):
+        """Вразбежку лента тоже обязана считаться — это тот же прямой ряд."""
+        lays = self._lays(LayoutPattern.BRICK)
+        assert sum(lay.tiles_grid for lay in lays) < 40
+
+    def test_opening_is_still_cut_out(self):
+        """Лента не знает про проёмы — они вырезаются после нарезки по углам.
+
+        Иначе кнопка «Учесть проём» на эконом-раскладке молча перестаёт работать:
+        плитки остаются висеть в проёме и попадают в закупку.
+
+        Проём взят шире плитки (ниша под ванну 1250 мм): дверь 800 мм плиткой
+        1200×600 не накрыть целиком, и «не кладём» там просто не сработает.
+        """
+        niche = [Opening("Ниша", 1250, 2000, x_mm=0, y_mm=0)]
+        plain = self._lays()[0]
+        with_niche = self._lays(openings=niche)[0]
+
+        assert with_niche.tiles_grid < plain.tiles_grid, "проём не вырезан"
+        for cell in with_niche.cells:
+            inside = cell.x + cell.w <= 1250 + 1e-6 and cell.y + cell.h <= 2000 + 1e-6
+            assert not inside, "плитка осталась висеть в проёме"
+
+    def test_tile_clipped_by_opening_is_marked_cut(self):
+        """Задело косяк — плитку режут по нему, даже если по сетке она целая."""
+        door = [Opening("Дверь", 800, 2000, x_mm=600, y_mm=0)]
+        lay = self._lays(openings=door)[0]
+        touching = [
+            c for c in lay.cells
+            if c.x < 1400 - 1e-6 and c.x + c.w > 600 + 1e-6 and c.y < 2000 - 1e-6
+        ]
+        assert touching, "проём никого не задел — проверять нечего"
+        assert all(c.is_cut for c in touching), "плитка у косяка не помечена резаной"
+
+    def test_angled_patterns_are_refused(self):
+        """У 45° «продолжения за угол» нет, а куски — многоугольники."""
+        assert not supports_wrap(LayoutPattern.DIAGONAL)
+        assert not supports_wrap(LayoutPattern.HERRINGBONE)
+        with pytest.raises(ValueError):
+            self._lays(LayoutPattern.HERRINGBONE)

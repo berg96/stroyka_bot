@@ -43,6 +43,10 @@ class Cell:
 
     polygon непустой — плитка лежит под углом (диагональ, ёлочка) и прямоугольником
     уже не описывается; x/y/w/h тогда её габаритная рамка.
+
+    counts_as_tile=False — это второй кусок плитки, разрезанной на углу: сама плитка
+    уже посчитана на соседней стене (эконом-раскладка по периметру). Класть его надо,
+    а покупать второй раз — нет.
     """
 
     x: float
@@ -51,6 +55,7 @@ class Cell:
     h: float
     is_cut: bool
     polygon: tuple[Point, ...] = ()
+    counts_as_tile: bool = True
 
 
 @dataclass(frozen=True)
@@ -68,12 +73,22 @@ class Layout:
 
     @property
     def tiles_grid(self) -> int:
-        """Штук плитки на поверхность: целые и подрезанные, каждая — из своей плитки."""
-        return len(self.cells)
+        """Штук плитки на поверхность: целые и подрезанные, каждая — из своей плитки.
+
+        Куски, приехавшие из-за угла (эконом-раскладка), не в счёт — их плитка уже
+        куплена на соседней стене, иначе закупка удвоит каждый угол.
+        """
+        return sum(1 for c in self.cells if c.counts_as_tile)
 
     @property
     def cuts_count(self) -> int:
-        return sum(1 for c in self.cells if c.is_cut)
+        """Сколько плиток придётся резать — за это в смете отдельная строка.
+
+        Считаем плитки, а не куски: угловая плитка режется ОДИН раз и даёт два
+        куска на две стены. Кусок из-за угла (counts_as_tile=False) — вторая
+        половина уже посчитанного реза, не новый рез.
+        """
+        return sum(1 for c in self.cells if c.is_cut and c.counts_as_tile)
 
     @property
     def rows(self) -> int:
@@ -196,6 +211,26 @@ def _clipped_by_opening(cell: Cell, surface: Surface) -> bool:
     return False
 
 
+def apply_openings(cells: list[Cell], surface: Surface) -> list[Cell]:
+    """Убрать плитки, попавшие в проём, и пометить резаными те, что задели косяк."""
+    out: list[Cell] = []
+    for cell in cells:
+        if _covered_by_opening(cell, surface):
+            continue  # плитка целиком в проёме — не кладём
+        if not cell.is_cut and _clipped_by_opening(cell, surface):
+            cell = Cell(
+                x=cell.x,
+                y=cell.y,
+                w=cell.w,
+                h=cell.h,
+                is_cut=True,
+                polygon=cell.polygon,
+                counts_as_tile=cell.counts_as_tile,
+            )
+        out.append(cell)
+    return out
+
+
 def build_cells(
     surface: Surface,
     tile: Tile,
@@ -243,13 +278,7 @@ def build_cells(
                 continue
             row_cells.append(Cell(x=gx, y=cy, w=gw, h=ch, is_cut=cut))
 
-        for cell in row_cells:
-            if _covered_by_opening(cell, surface):
-                continue  # плитка целиком в проёме — не кладём
-            if not cell.is_cut and _clipped_by_opening(cell, surface):
-                # Задело косяк двери — плитку придётся подрезать.
-                cell = Cell(x=cell.x, y=cell.y, w=cell.w, h=cell.h, is_cut=True)
-            cells.append(cell)
+        cells.extend(apply_openings(row_cells, surface))
 
     return cells
 
@@ -308,18 +337,18 @@ def _angled_cells(surface: Surface, tile: Tile, pattern: LayoutPattern) -> list[
         herringbone=pattern is LayoutPattern.HERRINGBONE,
     )
 
-    cells: list[Cell] = []
-    for piece in pieces:
-        x0, y0, x1, y1 = piece.bbox
-        cell = Cell(
-            x=x0, y=y0, w=x1 - x0, h=y1 - y0, is_cut=piece.is_cut, polygon=piece.polygon
+    cells = [
+        Cell(
+            x=piece.bbox[0],
+            y=piece.bbox[1],
+            w=piece.bbox[2] - piece.bbox[0],
+            h=piece.bbox[3] - piece.bbox[1],
+            is_cut=piece.is_cut,
+            polygon=piece.polygon,
         )
-        if _covered_by_opening(cell, surface):
-            continue
-        if not cell.is_cut and _clipped_by_opening(cell, surface):
-            cell = Cell(x=cell.x, y=cell.y, w=cell.w, h=cell.h, is_cut=True, polygon=cell.polygon)
-        cells.append(cell)
-    return cells
+        for piece in pieces
+    ]
+    return apply_openings(cells, surface)
 
 
 def _angled_advice(cells: list[Cell], pattern: LayoutPattern) -> list[str]:

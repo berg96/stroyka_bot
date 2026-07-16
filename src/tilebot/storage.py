@@ -163,6 +163,7 @@ def surface_to_payload(
     tile_locked: bool = False,
     grout_kind: str = GroutKind.CEMENT.value,
     offset_ratio: float = DEFAULT_OFFSET,
+    wrap: bool = False,
 ) -> str:
     return json.dumps(
         {
@@ -200,6 +201,9 @@ def surface_to_payload(
             "grout": grout,
             "grout_kind": grout_kind,
             "offset_ratio": offset_ratio,
+            # Эконом-раскладка: стены кладутся одной лентой по кругу, остаток
+            # плитки заворачивает за угол вместо мусорки.
+            "wrap": wrap,
             # Мастер повернул плитку сам — больше её не вертим, как бы ни хотелось
             # ради подрезки: как она лежит, решает он.
             "tile_locked": tile_locked,
@@ -223,6 +227,7 @@ class SavedSurface:
     tile_locked: bool = False
     grout_kind: GroutKind = GroutKind.CEMENT
     offset_ratio: float = DEFAULT_OFFSET
+    wrap: bool = False  # эконом: стены одной лентой по периметру
 
 
 def payload_to_surface(data: dict) -> SavedSurface:
@@ -247,6 +252,7 @@ def payload_to_surface(data: dict) -> SavedSurface:
         tile_locked=bool(data.get("tile_locked", False)),
         grout_kind=GroutKind(data.get("grout_kind", GroutKind.CEMENT.value)),
         offset_ratio=float(data.get("offset_ratio") or DEFAULT_OFFSET),
+        wrap=bool(data.get("wrap", False)),
     )
 
 

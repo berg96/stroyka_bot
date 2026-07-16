@@ -141,11 +141,20 @@ SAME_TILE = InlineKeyboardMarkup(
 )
 
 
-def after_surface(project_id: int) -> InlineKeyboardMarkup:
+def after_surface(
+    project_id: int, *, wrap: bool = False, can_wrap: bool = False
+) -> InlineKeyboardMarkup:
     """Что делать, когда поверхность посчитана."""
     b = InlineKeyboardBuilder()
     b.button(text="🔀 Сменить раскладку", callback_data=f"repat:{project_id}")
     b.button(text="↔️ Начало ряда", callback_data=f"restart:{project_id}")
+    # Лента бывает только у комнаты — на одной стене заворачивать за угол нечего.
+    # Подпись говорит, что будет по нажатию, а не в каком мы режиме сейчас.
+    if can_wrap:
+        b.button(
+            text="📐 Вернуть обычную" if wrap else "💰 Эконом: по кругу",
+            callback_data=f"wrap:{project_id}:{0 if wrap else 1}",
+        )
     b.button(text="🧱 Смещение рядов", callback_data=f"offset:{project_id}")
     b.button(text="🔄 Повернуть плитку", callback_data=f"rotate:{project_id}")
     b.button(text="📏 Размер плитки", callback_data=f"resize:{project_id}")

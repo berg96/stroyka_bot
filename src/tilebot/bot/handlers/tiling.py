@@ -7,6 +7,7 @@
 
 import io
 import logging
+import math
 
 from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
@@ -42,6 +43,7 @@ from tilebot.core.models import (
 )
 from tilebot.core.room import floor_dims, room_surfaces
 from tilebot.core.units import fmt_mm, plural
+from tilebot.core.wrap import supports_wrap, wrap_savings, wrap_wall_layouts
 from tilebot.render.scheme import render_layout
 from tilebot.storage import Storage, payload_to_surface, surface_to_payload
 
@@ -558,6 +560,44 @@ def _wall_tile(
     return common_orientation(walls, tile, pattern, start)
 
 
+def _layouts_for(saved_all: list, walls_tile: Tile | None) -> list[Layout]:
+    """Разложить все поверхности объекта — в том же порядке, что они сохранены.
+
+    Обычно каждая поверхность считается сама по себе. Эконом-раскладка (wrap)
+    ломает это допущение: стены комнаты кладутся ОДНОЙ лентой по кругу, и посчитать
+    их порознь нельзя — остаток плитки с одной стены живёт на следующей. Пол в
+    ленту не входит, у него своя плитка и свои углы.
+    """
+    head = saved_all[0]
+    wall_at = [i for i, s in enumerate(saved_all) if s.surface.kind is SurfaceKind.WALL]
+
+    banded: dict[int, Layout] = {}
+    if head.wrap and len(wall_at) >= 2 and supports_wrap(head.pattern):
+        tile = walls_tile or head.tile
+        band = wrap_wall_layouts(
+            [saved_all[i].surface for i in wall_at], tile, head.pattern, head.offset_ratio
+        )
+        banded = dict(zip(wall_at, band, strict=True))
+
+    out: list[Layout] = []
+    for i, saved in enumerate(saved_all):
+        if lay := banded.get(i):
+            out.append(lay)
+            continue
+        fixed = walls_tile if saved.surface.kind is SurfaceKind.WALL else None
+        out.append(
+            _lay(
+                saved.surface,
+                fixed or saved.tile,
+                saved.pattern,
+                saved.start_from.value,
+                turn=fixed is None and not saved.tile_locked,
+                offset_ratio=saved.offset_ratio,
+            )
+        )
+    return out
+
+
 def _lay(
     surface: Surface,
     tile: Tile,
@@ -612,10 +652,14 @@ async def _show_result(
     *,
     tile_photo: PilImage | None = None,
     grout: str | None = None,
+    wrap: bool = False,
 ) -> None:
     """Схемы всех поверхностей плюс один список закупки на них."""
     title = data.get("title", "")
     project_id = data["project_id"]
+    walls = [lay for lay in layouts if lay.surface.kind is SurfaceKind.WALL]
+    can_wrap = len(walls) >= 2 and supports_wrap(layouts[0].pattern)
+    markup = kb.after_surface(project_id, wrap=wrap, can_wrap=can_wrap)
 
     def draw(lay: Layout) -> bytes:
         return render_layout(
@@ -628,8 +672,8 @@ async def _show_result(
     if len(layouts) == 1:
         await message.answer_photo(
             BufferedInputFile(draw(layouts[0]), filename="scheme.png"),
-            caption=_caption(layouts, materials, waste),
-            reply_markup=kb.after_surface(project_id),
+            caption=_caption(layouts, materials, waste, wrap=wrap),
+            reply_markup=markup,
         )
         return
 
@@ -642,12 +686,18 @@ async def _show_result(
         await message.answer_media_group(chunk)
 
     await message.answer(
-        _caption(layouts, materials, waste),
-        reply_markup=kb.after_surface(project_id),
+        _caption(layouts, materials, waste, wrap=wrap),
+        reply_markup=markup,
     )
 
 
-def _caption(layouts: list[Layout], materials: list[Materials], waste: float | None) -> str:
+def _caption(
+    layouts: list[Layout],
+    materials: list[Materials],
+    waste: float | None,
+    *,
+    wrap: bool = False,
+) -> str:
     """Сводка по посчитанным поверхностям: площадь, плитка, закупка одним списком."""
     tile = layouts[0].tile
     area = sum(lay.surface.net_area_m2 for lay in layouts)
@@ -661,7 +711,8 @@ def _caption(layouts: list[Layout], materials: list[Materials], waste: float | N
         walls = sum(1 for lay in layouts if lay.surface.kind is SurfaceKind.WALL)
         floor = " + пол" if any(lay.surface.kind is SurfaceKind.FLOOR for lay in layouts) else ""
         counted = plural(walls, "стена", "стены", "стен")
-        head = f"<b>Комната целиком</b> — {counted}{floor}, {area:.2f} м²"
+        mode = " · эконом по кругу" if wrap else ""
+        head = f"<b>Комната целиком</b> — {counted}{floor}, {area:.2f} м²{mode}"
 
     # Как плитка легла — не то же самое, что мастер ввёл: ориентацию бот подбирает
     # сам. Показываем прямо и подсказываем, что это его решение, а не приговор.
@@ -682,6 +733,9 @@ def _caption(layouts: list[Layout], materials: list[Materials], waste: float | N
         cost = sum(m.tile_area_with_waste_m2 for m in materials) * tile.price_per_m2
         lines.append(f"\nПлитка на {money(cost)}")
 
+    if saved := _wrap_saved(layouts, waste, wrap=wrap):
+        lines.append(f"\n💰 Эконом сберёг <b>{saved}</b>: остатки уходят за угол, а не в мусор.")
+
     # Советы у стен одинаковой высоты повторяются — показываем каждый один раз.
     seen: list[str] = []
     for lay in layouts:
@@ -693,6 +747,39 @@ def _caption(layouts: list[Layout], materials: list[Materials], waste: float | N
         lines += [f"💡 {a}" for a in seen]
 
     return "\n".join(lines)
+
+
+def _wrap_saved(layouts: list[Layout], waste: float | None, *, wrap: bool) -> str:
+    """«Сколько я не купил» — в плитках и упаковках, а не в процентах.
+
+    Считаем по закупке, а не по голой сетке: покупают плитку с запасом и целыми
+    упаковками, поэтому «−5 плиток» и «−3 упаковки» — разные числа, и мастеру
+    важно второе. Пустая строка — экономии нет или считать нечего: обещать
+    выгоду, которой не вышло, хуже, чем промолчать.
+    """
+    if not wrap:
+        return ""
+    walls = [lay for lay in layouts if lay.surface.kind is SurfaceKind.WALL]
+    if len(walls) < 2:
+        return ""
+
+    tile = walls[0].tile
+    pattern = walls[0].pattern
+    per_wall, banded = wrap_savings([lay.surface for lay in walls], tile, pattern)
+
+    share = WASTE_BY_PATTERN[pattern] if waste is None else waste
+    buy_normal = math.ceil(per_wall * (1 + share))
+    buy_eco = math.ceil(banded * (1 + share))
+    diff = buy_normal - buy_eco
+    if diff <= 0:
+        return ""
+
+    out = f"{diff} {plural(diff, 'плитку', 'плитки', 'плиток')}"
+    if tile.per_pack:
+        packs = math.ceil(buy_normal / tile.per_pack) - math.ceil(buy_eco / tile.per_pack)
+        if packs > 0:
+            out += f" — это {packs} {plural(packs, 'упаковка', 'упаковки', 'упаковок')}"
+    return out
 
 
 # --- Смена раскладки и проёмы ------------------------------------------------
@@ -727,6 +814,40 @@ async def do_repattern(call: CallbackQuery, storage: Storage) -> None:
     await _redraw(call.message, call.from_user.id, storage, project_id)
 
 
+@router.callback_query(F.data.startswith("wrap:"))
+async def set_wrap(call: CallbackQuery, storage: Storage) -> None:
+    """Эконом-раскладка: стены одной лентой по кругу вместо стены-по-отдельности.
+
+    Просьба Сани (16.07): обычная раскладка бьёт целую плитку об угол и
+    выбрасывает остаток на каждой стене — «огромный расход». Лента пускает
+    остаток за угол на следующую стену.
+    """
+    _, raw_id, raw_on = call.data.split(":")
+    project_id = int(raw_id)
+    on = raw_on == "1"
+
+    project = await storage.get_project(project_id, call.from_user.id)
+    if project is None or not project.surfaces:
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    saved_all = [payload_to_surface(row.dump()) for row in project.surfaces]
+    if on and not supports_wrap(saved_all[0].pattern):
+        await call.answer(
+            "Под 45° так не выйдет: там и так режется весь периметр. "
+            "Эконом работает на «шов в шов» и «вразбежку».",
+            show_alert=True,
+        )
+        return
+
+    if not await storage.update_project_surfaces(project_id, call.from_user.id, wrap=on):
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    await call.answer("Пересчитал по кругу" if on else "Вернул обычную")
+    await _redraw(call.message, call.from_user.id, storage, project_id)
+
+
 async def _redraw(message: Message, user_id: int, storage: Storage, project_id: int) -> None:
     """Пересчитать объект из сохранённых замеров и показать заново.
 
@@ -750,27 +871,16 @@ async def _redraw(message: Message, user_id: int, storage: Storage, project_id: 
         )
     )
 
-    layouts: list[Layout] = []
-    materials: list[Materials] = []
-    for saved in saved_all:
-        fixed = walls_tile if saved.surface.kind is SurfaceKind.WALL else None
-        layout = _lay(
-            saved.surface,
-            fixed or saved.tile,
-            saved.pattern,
-            saved.start_from.value,
-            turn=fixed is None and not saved.tile_locked,
-            offset_ratio=saved.offset_ratio,
+    layouts = _layouts_for(saved_all, walls_tile)
+    materials = [
+        calc_materials(
+            layout,
+            waterproofing=saved.waterproofing,
+            waste=saved.waste,
+            grout_kind=saved.grout_kind,
         )
-        layouts.append(layout)
-        materials.append(
-            calc_materials(
-                layout,
-                waterproofing=saved.waterproofing,
-                waste=saved.waste,
-                grout_kind=saved.grout_kind,
-            )
-        )
+        for layout, saved in zip(layouts, saved_all, strict=True)
+    ]
 
     await _show_result(
         message,
@@ -780,6 +890,7 @@ async def _redraw(message: Message, user_id: int, storage: Storage, project_id: 
         head.waste,
         tile_photo=await _tile_texture(message.bot, head.tile_photo_id),
         grout=head.grout,
+        wrap=head.wrap,
     )
 
 
