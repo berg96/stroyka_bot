@@ -30,6 +30,8 @@ from tilebot.core.estimate import money
 from tilebot.core.layout import Layout, best_orientation, build_layout, common_orientation
 from tilebot.core.materials import Materials, calc_materials, merge_materials
 from tilebot.core.models import (
+    BRICK_OFFSETS,
+    DEFAULT_OFFSET,
     WASTE_BY_PATTERN,
     LayoutPattern,
     Opening,
@@ -563,6 +565,7 @@ def _lay(
     start_raw: str,
     *,
     turn: bool = True,
+    offset_ratio: float = DEFAULT_OFFSET,
 ) -> Layout:
     """Разложить поверхность.
 
@@ -574,9 +577,9 @@ def _lay(
         [StartFrom.EDGE, StartFrom.CENTER] if start_raw == "auto" else [StartFrom(start_raw)]
     )
     candidates = [
-        best_orientation(surface, tile, pattern, start)[0]
+        best_orientation(surface, tile, pattern, start, offset_ratio=offset_ratio)[0]
         if turn
-        else build_layout(surface, tile, pattern, start)
+        else build_layout(surface, tile, pattern, start, offset_ratio=offset_ratio)
         for start in starts
     ]
     return max(candidates, key=lambda lay: min(lay.x.min_cut_mm, lay.y.min_cut_mm))
@@ -757,6 +760,7 @@ async def _redraw(message: Message, user_id: int, storage: Storage, project_id: 
             saved.pattern,
             saved.start_from.value,
             turn=fixed is None and not saved.tile_locked,
+            offset_ratio=saved.offset_ratio,
         )
         layouts.append(layout)
         materials.append(
@@ -981,6 +985,45 @@ async def got_tile_price(message: Message, state: FSMContext, storage: Storage) 
     from tilebot.bot.handlers.projects import show_act
 
     await show_act(message, message.from_user.id, storage, project_id)
+
+
+@router.callback_query(F.data.startswith("offset:"))
+async def ask_offset(call: CallbackQuery, storage: Storage) -> None:
+    """Смещение рядов вразбежку: половина плитки или треть (палубная)."""
+    project_id = int(call.data.split(":")[1])
+    project = await storage.get_project(project_id, call.from_user.id)
+    if project is None or not project.surfaces:
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    head = payload_to_surface(project.surfaces[0].dump())
+    if head.pattern is not LayoutPattern.BRICK:
+        await call.answer("Смещение есть только у раскладки «вразбежку».", show_alert=True)
+        return
+
+    await call.answer()
+    await call.message.answer(
+        "На сколько сдвигать каждый ряд?\n\n"
+        "<i>1/2 — классический кирпич. 1/3 — палубная: так кладут длинную плитку, "
+        "иначе край гуляет и рисунок идёт лесенкой.</i>",
+        reply_markup=kb.brick_offsets(project_id, head.offset_ratio),
+    )
+
+
+@router.callback_query(F.data.startswith("setoffset:"))
+async def set_offset(call: CallbackQuery, storage: Storage) -> None:
+    _, raw_id, label = call.data.split(":")
+    project_id = int(raw_id)
+    ratio = BRICK_OFFSETS.get(label, DEFAULT_OFFSET)
+
+    if not await storage.update_project_surfaces(
+        project_id, call.from_user.id, offset_ratio=ratio
+    ):
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    await call.answer("Пересчитал")
+    await _redraw(call.message, call.from_user.id, storage, project_id)
 
 
 @router.callback_query(F.data.startswith("groutkind:"))

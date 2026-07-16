@@ -8,7 +8,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from tilebot.core.models import GroutKind, LayoutPattern, StartFrom
+from tilebot.core.models import BRICK_OFFSETS, GroutKind, LayoutPattern, StartFrom
 from tilebot.render.scheme import GROUT_COLORS
 
 MAIN_MENU = ReplyKeyboardMarkup(
@@ -146,6 +146,7 @@ def after_surface(project_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="🔀 Сменить раскладку", callback_data=f"repat:{project_id}")
     b.button(text="↔️ Начало ряда", callback_data=f"restart:{project_id}")
+    b.button(text="🧱 Смещение рядов", callback_data=f"offset:{project_id}")
     b.button(text="🔄 Повернуть плитку", callback_data=f"rotate:{project_id}")
     b.button(text="📏 Размер плитки", callback_data=f"resize:{project_id}")
     b.button(text="🖼 Фото плитки", callback_data=f"tilephoto:{project_id}")
@@ -159,6 +160,17 @@ def after_surface(project_id: int) -> InlineKeyboardMarkup:
     # мастер закупался сам.
     b.button(text="📄 Акт выполненных работ", callback_data=f"act:{project_id}")
     b.adjust(2, 2, 1)
+    return b.as_markup()
+
+
+def brick_offsets(project_id: int, current: float) -> InlineKeyboardMarkup:
+    """На сколько сдвигать ряд: половина — классический кирпич, треть — палубная."""
+    b = InlineKeyboardBuilder()
+    for label, ratio in BRICK_OFFSETS.items():
+        mark = " ✓" if abs(ratio - current) < 1e-6 else ""
+        b.button(text=f"{label}{mark}", callback_data=f"setoffset:{project_id}:{label}")
+    b.button(text="⬅️ Назад", callback_data=f"open:{project_id}")
+    b.adjust(3, 1)
     return b.as_markup()
 
 

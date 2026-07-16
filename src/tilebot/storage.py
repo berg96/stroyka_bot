@@ -29,6 +29,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship,
 
 from tilebot.core.estimate import PriceList
 from tilebot.core.models import (
+    DEFAULT_OFFSET,
     GroutKind,
     LayoutPattern,
     Opening,
@@ -161,6 +162,7 @@ def surface_to_payload(
     grout: str | None = None,
     tile_locked: bool = False,
     grout_kind: str = GroutKind.CEMENT.value,
+    offset_ratio: float = DEFAULT_OFFSET,
 ) -> str:
     return json.dumps(
         {
@@ -197,6 +199,7 @@ def surface_to_payload(
             "tile_photo_id": tile_photo_id,
             "grout": grout,
             "grout_kind": grout_kind,
+            "offset_ratio": offset_ratio,
             # Мастер повернул плитку сам — больше её не вертим, как бы ни хотелось
             # ради подрезки: как она лежит, решает он.
             "tile_locked": tile_locked,
@@ -219,6 +222,7 @@ class SavedSurface:
     grout: str | None = None
     tile_locked: bool = False
     grout_kind: GroutKind = GroutKind.CEMENT
+    offset_ratio: float = DEFAULT_OFFSET
 
 
 def payload_to_surface(data: dict) -> SavedSurface:
@@ -242,6 +246,7 @@ def payload_to_surface(data: dict) -> SavedSurface:
         grout=data.get("grout"),
         tile_locked=bool(data.get("tile_locked", False)),
         grout_kind=GroutKind(data.get("grout_kind", GroutKind.CEMENT.value)),
+        offset_ratio=float(data.get("offset_ratio") or DEFAULT_OFFSET),
     )
 
 

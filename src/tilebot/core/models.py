@@ -17,7 +17,7 @@ class LayoutPattern(StrEnum):
     """Схема раскладки. Влияет на подрезку и запас материала."""
 
     STRAIGHT = "straight"  # шов в шов
-    BRICK = "brick"  # вразбежку (кирпичная), смещение задаётся offset_ratio
+    BRICK = "brick"  # вразбежку: смещение ряда задаётся offset_ratio
     DIAGONAL = "diagonal"  # по диагонали 45°
     HERRINGBONE = "herringbone"  # ёлочка
 
@@ -28,6 +28,17 @@ class GroutKind(StrEnum):
 
     CEMENT = "cement"
     EPOXY = "epoxy"
+
+
+# Насколько сдвигать каждый следующий ряд, долей плитки. 1/2 — классический кирпич,
+# 1/3 — «палубная»: так кладут длинную плитку, чтобы не гулял край и рисунок не
+# выглядел лесенкой.
+BRICK_OFFSETS: dict[str, float] = {
+    "1/2": 0.5,
+    "1/3": 1 / 3,
+    "1/4": 0.25,
+}
+DEFAULT_OFFSET = 0.5
 
 
 class StartFrom(StrEnum):

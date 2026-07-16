@@ -520,3 +520,56 @@ class TestAngled:
         wide = sum(1 for c in cells if c.w > c.h)
         tall = sum(1 for c in cells if c.h > c.w)
         assert wide > 0 and tall > 0
+
+
+class TestBrickOffset:
+    """Разбежка — сдвиг относительно СОСЕДНЕГО ряда, а не от края стены."""
+
+    def _seams(self, width, start, ratio=0.5):
+        """Где стоит сетка каждого ряда — по первой ЦЕЛОЙ плитке.
+
+        По краевому обрезку смещение не измеришь: он обрублен стеной и врёт.
+        """
+        lay = build_layout(
+            Surface("с", width, 2700), Tile(600, 300, joint_mm=2),
+            LayoutPattern.BRICK, start, offset_ratio=ratio,
+        )
+        rows = {}
+        for c in lay.cells:
+            rows.setdefault(round(c.y), []).append(c)
+
+        step = 600 + 2
+        out = []
+        for y in sorted(rows)[:3]:
+            row = sorted(rows[y], key=lambda c: c.x)
+            whole = next(c for c in row if not c.is_cut)
+            out.append(whole.x % step)
+        return out
+
+    def test_offset_is_half_a_tile_from_any_start(self):
+        """Артём: «на 2 и 4 стене явно не в половину разбежка».
+
+        При старте от центра базовый ряд сам начинается с подрезки — и смещение,
+        отсчитанное от края стены, давало 97 мм вместо 301.
+        """
+        step = 600 + 2
+        for width in (2000, 1800, 2400):
+            for start in (StartFrom.EDGE, StartFrom.CENTER):
+                rows = self._seams(width, start)
+                shift = abs(rows[0] - rows[1]) % step
+                assert shift == pytest.approx(step / 2, abs=2), (
+                    f"стена {width}, старт {start.value}: сдвиг {shift:.0f} вместо {step / 2:.0f}"
+                )
+
+    def test_rows_alternate_back_to_the_original_line(self):
+        """Через ряд сетка обязана вернуться на место — иначе это лесенка, а не кирпич."""
+        rows = self._seams(2000, StartFrom.CENTER)
+        assert rows[0] == pytest.approx(rows[2], abs=2)
+
+    def test_deck_offset_walks_a_third_each_row(self):
+        """Палубная: ряды идут лесенкой 0 → ⅓ → ⅔, а не через один."""
+        step = 600 + 2
+        rows = self._seams(2000, StartFrom.EDGE, ratio=1 / 3)
+        assert abs(rows[0] - rows[1]) == pytest.approx(step / 3, abs=2)
+        assert abs(rows[1] - rows[2]) == pytest.approx(step / 3, abs=2)
+        assert rows[0] != pytest.approx(rows[2], abs=2), "при 1/3 через ряд возврата нет"

@@ -9,7 +9,7 @@ import math
 from dataclasses import dataclass
 
 from tilebot.core.angled import Point, angled_pieces
-from tilebot.core.models import LayoutPattern, StartFrom, Surface, Tile
+from tilebot.core.models import DEFAULT_OFFSET, LayoutPattern, StartFrom, Surface, Tile
 
 # Подрезка уже этой доли плитки выглядит плохо и крошится при резке — классическое
 # правило мастеров «не меньше трети/половины плитки».
@@ -139,25 +139,31 @@ def _spans(axis: Axis, tile_mm: float, joint_mm: float) -> list[tuple[float, flo
 
 
 def _staggered_spans(
-    surface_w: float, tile_mm: float, joint_mm: float, shift: float
+    surface_w: float, tile_mm: float, joint_mm: float, shift: float, base_x: float
 ) -> list[tuple[float, float, bool]]:
-    """Смещённый ряд кирпичной кладки: обрезок, дальше целые до конца стены.
+    """Смещённый ряд кирпичной кладки: сетка соседнего ряда, сдвинутая на shift.
 
-    Сдвинутому ряду подрезка соседнего ряда не наследуется — у него своя, от
-    смещения. Раньше он брал спаны оси вместе с её краевой подрезкой, и слева
-    оказывались два обрезка подряд там, где должна лежать целая плитка.
+    Считать смещение от края стены нельзя: если базовый ряд сам начинается с
+    подрезки (раскладка от центра), то ряды разъезжаются не на полплитки, а на
+    сколько получится — у стены 2 м это давало 97 мм вместо 301. Разбежка — это
+    сдвиг ОТНОСИТЕЛЬНО соседнего ряда, поэтому пляшем от его целых плиток.
     """
-    out: list[tuple[float, float, bool]] = []
-    first = shift - joint_mm
-    if first > 1e-6:
-        out.append((0.0, first, True))
+    step = tile_mm + joint_mm
 
-    pos = shift
+    # Отходим назад от первой целой плитки соседнего ряда, пока не накроем левый край.
+    pos = base_x + shift
+    while pos > -tile_mm:
+        pos -= step
+    pos += step
+
+    out: list[tuple[float, float, bool]] = []
     while pos < surface_w - 1e-6:
-        width = min(tile_mm, surface_w - pos)
+        left = max(0.0, pos)
+        right = min(surface_w, pos + tile_mm)
+        width = right - left
         if width > 1e-6:
-            out.append((pos, width, width < tile_mm - 1e-6))
-        pos += tile_mm + joint_mm
+            out.append((left, width, width < tile_mm - 1e-6))
+        pos += step
     return out
 
 
@@ -190,7 +196,12 @@ def _clipped_by_opening(cell: Cell, surface: Surface) -> bool:
 
 
 def build_cells(
-    surface: Surface, tile: Tile, x: Axis, y: Axis, pattern: LayoutPattern
+    surface: Surface,
+    tile: Tile,
+    x: Axis,
+    y: Axis,
+    pattern: LayoutPattern,
+    offset_ratio: float = DEFAULT_OFFSET,
 ) -> list[Cell]:
     """Разложить сетку в конкретные плитки — на этом строятся и счёт, и схема."""
     cols = _spans(x, tile.width_mm, tile.joint_mm)
@@ -201,12 +212,21 @@ def build_cells(
     for r, (cy, ch, cut_y) in enumerate(rows):
         # Вразбежку каждый второй ряд сдвинут на полплитки; слева появляется
         # обрезок, справа плитка уходит за стену и тоже режется.
-        staggered = pattern is LayoutPattern.BRICK and r % 2 == 1
-        shift = (tile.width_mm + tile.joint_mm) / 2 if staggered else 0.0
+        # Каждый ряд уезжает на свою долю: при 1/2 это 0, ½, 0, ½; при 1/3 —
+        # 0, ⅓, ⅔, 0 (палубная раскладка, ряды идут лесенкой, а не через один).
+        step = tile.width_mm + tile.joint_mm
+        shift = 0.0
+        if pattern is LayoutPattern.BRICK:
+            shift = ((r * offset_ratio) % 1.0) * step
+        staggered = shift > 1e-6
 
         row_cells: list[Cell] = []
+        # Первая целая плитка базового ряда — от неё и пляшет разбежка.
+        base_x = x.cut_start_mm + tile.joint_mm if x.cut_start_mm > 0 else 0.0
         spans = (
-            _staggered_spans(sw, tile.width_mm, tile.joint_mm, shift) if staggered else cols
+            _staggered_spans(sw, tile.width_mm, tile.joint_mm, shift, base_x)
+            if staggered
+            else cols
         )
 
         for cx, cw, cut_x in spans:
@@ -331,6 +351,7 @@ def build_layout(
     tile: Tile,
     pattern: LayoutPattern = LayoutPattern.STRAIGHT,
     start_from: StartFrom = StartFrom.EDGE,
+    offset_ratio: float = DEFAULT_OFFSET,
 ) -> Layout:
     """Посчитать раскладку плитки на поверхности."""
     if pattern in ANGLED:
@@ -358,7 +379,7 @@ def build_layout(
         start_from=start_from,
         x=x,
         y=y,
-        cells=build_cells(surface, tile, x, y, pattern),
+        cells=build_cells(surface, tile, x, y, pattern, offset_ratio),
         advice=_advice(x, y, tile, surface, start_from),
     )
 
@@ -368,14 +389,15 @@ def best_orientation(
     tile: Tile,
     pattern: LayoutPattern = LayoutPattern.STRAIGHT,
     start_from: StartFrom = StartFrom.EDGE,
+    offset_ratio: float = DEFAULT_OFFSET,
 ) -> tuple[Layout, Layout]:
     """Разложить плитку в обеих ориентациях и вернуть (лучшую, альтернативную).
 
     Лучшая — та, где самая узкая подрезка шире: меньше риска расколоть полоску и
     аккуратнее выглядит угол.
     """
-    normal = build_layout(surface, tile, pattern, start_from)
-    turned = build_layout(surface, tile.rotated(), pattern, start_from)
+    normal = build_layout(surface, tile, pattern, start_from, offset_ratio)
+    turned = build_layout(surface, tile.rotated(), pattern, start_from, offset_ratio)
 
     def score(lay: Layout) -> tuple[float, float]:
         worst_cut = min(lay.x.min_cut_mm, lay.y.min_cut_mm)

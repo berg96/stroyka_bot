@@ -168,6 +168,20 @@ def render_layout(
             width=2,
         )
 
+        # Ширину реза пишем на самой плитке: подрезка бывает и в середине ряда
+        # (вразбежку), и почти целой (596 из 600) — без цифры мастер гадает, что
+        # тут не так. Подписываем, только если цифра влезает в плитку.
+        if cell.is_cut:
+            label = f"{cell.w:.0f}"
+            if d.textlength(label, font=f_small) + 8 < box[2] - box[0]:
+                d.text(
+                    ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2),
+                    label,
+                    fill=CUT_EDGE,
+                    font=f_small,
+                    anchor="mm",
+                )
+
     for op in surface.openings:
         if op.x_mm is None or op.y_mm is None:
             continue
