@@ -25,8 +25,20 @@ from tilebot.core.layout import (
     build_layout,
 )
 from tilebot.core.models import DEFAULT_OFFSET, LayoutPattern, StartFrom, Surface, SurfaceKind, Tile
+from tilebot.core.units import fmt_mm
 
 EPS = 1e-6
+
+# Толщина пропила: рез съедает материал, и остаток КОРОЧЕ, чем «плитка минус
+# отрезанное». В обычной раскладке это никого не волнует — остаток летит в мусор.
+# В ленте идут в дело обе половины, поэтому пропил надо вычитать, иначе бот обещает
+# кусок, которого не существует.
+#
+# 2 мм — алмазный диск мокрореза/болгарки (1,6–2,2 мм) плюс шлифовка кромки. Ручной
+# плиткорез раскалывает и почти не ест, распил крупноформата с подгонкой съедает
+# больше. ⚠️ Цифру надо подтвердить у Сани: он режет, ему и знать. Артём (16.07):
+# «при разрезе тоже сколько-то мм теряется, а может даже и см».
+KERF_MM = 2.0
 
 
 def supports_wrap(pattern: LayoutPattern) -> bool:
@@ -39,11 +51,18 @@ def supports_wrap(pattern: LayoutPattern) -> bool:
     return pattern not in ANGLED
 
 
-def _slice_cells(cells: list[Cell], x0: float, x1: float) -> list[Cell]:
+def _slice_cells(
+    cells: list[Cell], x0: float, x1: float, kerf_mm: float = KERF_MM
+) -> list[Cell]:
     """Куски плиток, попавшие на участок ленты [x0, x1) — в координатах участка.
 
     Плитка, лежащая через границу, попадает сюда дважды: левой частью в одну
     стену, правой — в другую. Купленной она считается там, где начинается.
+
+    Остаток короче на пропил: из плитки 1200 отрезали 798 — в руках не 402, а
+    402 минус диск. Недостачу отдаём В УГОЛ (кусок сдвигаем от угла на пропил),
+    а не в шов с соседней плиткой: в углу и так стык двух стен, шов и затирка,
+    а расширенный шов посреди стены мастер увидит.
     """
     out: list[Cell] = []
     for cell in cells:
@@ -54,6 +73,11 @@ def _slice_cells(cells: list[Cell], x0: float, x1: float) -> list[Cell]:
             continue
 
         crosses = cell.x < x0 - EPS  # плитка началась на прошлой стене
+        x_local = left - x0
+        if crosses:
+            width -= kerf_mm
+            x_local += kerf_mm
+
         # Кусок, который меньше минимальной подрезки, к стене не приклеить —
         # он крошится и вылетает. Такой огрызок не кладём: у следующей стены
         # раскладка начнётся новой плиткой, а этот кусок уйдёт в бой (запас).
@@ -62,7 +86,7 @@ def _slice_cells(cells: list[Cell], x0: float, x1: float) -> list[Cell]:
 
         out.append(
             Cell(
-                x=left - x0,
+                x=x_local,
                 y=cell.y,
                 w=width,
                 h=cell.h,
@@ -78,6 +102,7 @@ def wrap_wall_layouts(
     tile: Tile,
     pattern: LayoutPattern = LayoutPattern.STRAIGHT,
     offset_ratio: float = DEFAULT_OFFSET,
+    kerf_mm: float = KERF_MM,
 ) -> list[Layout]:
     """Разложить стены комнаты одной непрерывной лентой и нарезать её по углам.
 
@@ -111,7 +136,7 @@ def wrap_wall_layouts(
     x0 = 0.0
     for wall in walls:
         x1 = x0 + wall.width_mm
-        cells = apply_openings(_slice_cells(band_layout.cells, x0, x1), wall)
+        cells = apply_openings(_slice_cells(band_layout.cells, x0, x1, kerf_mm), wall)
         layouts.append(
             Layout(
                 surface=wall,
@@ -125,7 +150,7 @@ def wrap_wall_layouts(
                 x=NO_AXIS,
                 y=band_layout.y,
                 cells=cells,
-                advice=_advice(cells, len(walls)),
+                advice=_advice(cells, len(walls), kerf_mm),
             )
         )
         x0 = x1
@@ -133,7 +158,7 @@ def wrap_wall_layouts(
     return layouts
 
 
-def _advice(cells: list[Cell], walls_count: int) -> list[str]:
+def _advice(cells: list[Cell], walls_count: int, kerf_mm: float = KERF_MM) -> list[str]:
     """Что мастеру важно знать про ленту — на его же языке."""
     from_corner = sum(1 for c in cells if not c.counts_as_tile)
     out: list[str] = []
@@ -142,6 +167,15 @@ def _advice(cells: list[Cell], walls_count: int) -> list[str]:
             f"Эконом: {from_corner} шт — остатки плиток с прошлой стены, режешь их "
             "по углу и кладёшь дальше. Отдельно покупать не надо, они уже в закупке."
         )
+        # Рез съедает материал, поэтому остаток не дотягивает до угла. Ставим его
+        # по шву от соседней плитки, а щель прячем в угол — но мастер увидит её на
+        # схеме, поэтому говорим сразу и с цифрой.
+        if kerf_mm > 0:
+            out.append(
+                f"Считаю пропил {fmt_mm(kerf_mm)} мм: остаток на столько короче, "
+                f"и в углу остаётся щель ~{fmt_mm(kerf_mm)} мм — она уходит под "
+                "затирку. Режешь тоньше или толще — скажи, пересчитаю."
+            )
     out.append(
         "Кладка идёт по кругу непрерывно: закончил стену — остаток плитки заворачивает "
         f"за угол на следующую. Стен {walls_count}, порядок держи тот же, что при обмере."

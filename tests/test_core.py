@@ -33,7 +33,7 @@ from tilebot.core.materials import (
 from tilebot.core.models import LayoutPattern, Opening, StartFrom, Surface, SurfaceKind, Tile
 from tilebot.core.room import floor_dims, room_surfaces
 from tilebot.core.units import fmt_mm
-from tilebot.core.wrap import supports_wrap, wrap_savings, wrap_wall_layouts
+from tilebot.core.wrap import KERF_MM, supports_wrap, wrap_savings, wrap_wall_layouts
 from tilebot.render.scheme import _texture, grout_rgb, render_layout
 
 
@@ -675,10 +675,46 @@ class TestWrapAroundEconomy:
             (c for c in self._lays()[1].cells if c.y < 1), key=lambda c: c.x
         )
         first = row[0]
-        assert first.x == pytest.approx(0.0), "продолжение должно лечь прямо в угол"
-        assert round(first.w) == 402
         assert not first.counts_as_tile, "остаток уже куплен на прошлой стене"
         assert first.is_cut
+        # 1200 − 798.5 = 401.5 по геометрии, но диск съел свои 2 мм.
+        assert first.w == pytest.approx(399.5)
+
+    def test_kerf_is_taken_out_of_the_offcut(self):
+        """Рез съедает материал — остаток КОРОЧЕ, чем «плитка минус отрезанное».
+
+        Артём (16.07): «при разрезе тоже сколько-то мм теряется». В обычной
+        раскладке это неважно (остаток в мусор), а лента кладёт обе половины —
+        пообещать кусок 402, когда в руках 399.5, значит отправить мастера
+        подгонять несуществующие миллиметры.
+        """
+        wall1, wall2 = self._lays()[0], self._lays()[1]
+        cut = next(c for c in wall1.cells if c.y < 1 and c.is_cut)
+        offcut = min((c for c in wall2.cells if c.y < 1), key=lambda c: c.x)
+
+        tile_w = self.TILE.width_mm
+        assert cut.w + offcut.w == pytest.approx(tile_w - KERF_MM), (
+            f"куски {cut.w:.1f} + {offcut.w:.1f} = {cut.w + offcut.w:.1f}, "
+            f"а плитка {tile_w:.0f} минус пропил {KERF_MM}"
+        )
+        # Отдельно от KERF_MM: сумма обязана быть СТРОГО меньше плитки. Иначе
+        # обнуление константы прошло бы мимо теста — он сверяется сам с собой.
+        assert cut.w + offcut.w < tile_w - 0.5, "рез не съел ничего — пропила нет"
+
+    def test_kerf_goes_into_the_corner_not_the_joint(self):
+        """Недостача уходит в угол, а не в шов посреди стены — там её видно.
+
+        Кусок сдвинут от угла на пропил, поэтому шов со следующей плиткой
+        остаётся нормальным.
+        """
+        row = sorted((c for c in self._lays()[1].cells if c.y < 1), key=lambda c: c.x)
+        offcut, following = row[0], row[1]
+
+        assert offcut.x == pytest.approx(KERF_MM), "пропил не отдан в угол"
+        joint = following.x - (offcut.x + offcut.w)
+        assert joint == pytest.approx(self.TILE.joint_mm), (
+            f"шов у угла разъехался до {joint:.1f} мм вместо {self.TILE.joint_mm}"
+        )
 
     def test_cut_is_billed_once_per_tile(self):
         """Рез на углу один, а кусков два — смета не должна брать деньги дважды."""
