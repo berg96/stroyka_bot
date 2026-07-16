@@ -312,3 +312,51 @@ class TestEstimateAndAct:
 
         assert app.said("ИТОГО К ОПЛАТЕ:")
         assert app.said("куплено заказчиком")
+
+
+class TestRotate:
+    """Артём: «указал 70 20, а хочу 20 70». Как плитка лежит — решает мастер."""
+
+    def _tile_line(self, app):
+        summary = [t for t in app.texts if "Купить:" in t][-1]
+        return next(x for x in summary.splitlines() if x.startswith("Плитка "))
+
+    async def test_tile_can_be_turned_on_its_side(self, app):
+        await _room_flow(app)
+        before = self._tile_line(app)
+
+        app.forget()
+        await app.click("Повернуть плитку")
+        after = self._tile_line(app)
+
+        assert before != after, "плитка не повернулась"
+        assert ("лёжа" in before) != ("лёжа" in after)
+
+    async def test_rotation_survives_a_pattern_switch(self, app):
+        """Иначе бот тут же перевернёт плитку обратно «как лучше» — кнопка бесполезна."""
+        await _room_flow(app)
+        await app.click("Повернуть плитку")
+        rotated = self._tile_line(app)
+
+        await app.click("Сменить раскладку")
+        await app.click("Ёлочка")
+
+        assert self._tile_line(app) == rotated
+
+    async def test_rotation_survives_an_opening(self, app):
+        """Проём пересохраняет поверхность — поворот при этом терять нельзя.
+
+        Проверяем не сразу, а после следующего пересчёта: сброшенный флаг всплывает
+        именно там, а в ответе на сам проём ещё не виден.
+        """
+        await _tile_flow(app)
+        await app.click("Повернуть плитку")
+        rotated = self._tile_line(app)
+
+        await app.click("Учесть проём")
+        await app.send("дверь 0.8 2.1")
+        assert self._tile_line(app) == rotated
+
+        await app.click("Сменить раскладку")
+        await app.click("Ёлочка")
+        assert self._tile_line(app) == rotated

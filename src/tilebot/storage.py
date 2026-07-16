@@ -151,6 +151,7 @@ def surface_to_payload(
     waste: float | None = None,
     tile_photo_id: str | None = None,
     grout: str | None = None,
+    tile_locked: bool = False,
 ) -> str:
     return json.dumps(
         {
@@ -186,6 +187,9 @@ def surface_to_payload(
             # не серые квадратики, а то, что мастер реально купил.
             "tile_photo_id": tile_photo_id,
             "grout": grout,
+            # Мастер повернул плитку сам — больше её не вертим, как бы ни хотелось
+            # ради подрезки: как она лежит, решает он.
+            "tile_locked": tile_locked,
         },
         ensure_ascii=False,
     )
@@ -203,6 +207,7 @@ class SavedSurface:
     waste: float | None = None  # None — берём норму под раскладку
     tile_photo_id: str | None = None
     grout: str | None = None
+    tile_locked: bool = False
 
 
 def payload_to_surface(data: dict) -> SavedSurface:
@@ -224,6 +229,7 @@ def payload_to_surface(data: dict) -> SavedSurface:
         waste=data.get("waste"),
         tile_photo_id=data.get("tile_photo_id"),
         grout=data.get("grout"),
+        tile_locked=bool(data.get("tile_locked", False)),
     )
 
 
@@ -322,6 +328,21 @@ class Storage:
             for row in result.scalars():
                 data = json.loads(row.payload_json)
                 data["tile"]["price_per_m2"] = price
+                row.payload_json = json.dumps(data, ensure_ascii=False)
+            await s.commit()
+        return True
+
+    async def rotate_tile(self, project_id: int, tg_id: int) -> bool:
+        """Положить плитку на бок во всём объекте и запомнить, что так решил мастер."""
+        if not await self.owns(project_id, tg_id):
+            return False
+        async with self.session() as s:
+            result = await s.execute(select(SurfaceRow).where(SurfaceRow.project_id == project_id))
+            for row in result.scalars():
+                data = json.loads(row.payload_json)
+                tile = data["tile"]
+                tile["width_mm"], tile["height_mm"] = tile["height_mm"], tile["width_mm"]
+                data["tile_locked"] = True
                 row.payload_json = json.dumps(data, ensure_ascii=False)
             await s.commit()
         return True

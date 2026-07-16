@@ -587,9 +587,13 @@ def _caption(layouts: list[Layout], materials: list[Materials], waste: float | N
         floor = " + пол" if any(lay.surface.kind is SurfaceKind.FLOOR for lay in layouts) else ""
         head = f"<b>Комната целиком</b> — {_walls_word(walls)}{floor}, {area:.2f} м²"
 
+    # Как плитка легла — не то же самое, что мастер ввёл: ориентацию бот подбирает
+    # сам. Показываем прямо и подсказываем, что это его решение, а не приговор.
+    lying = "лёжа" if tile.width_mm >= tile.height_mm else "стоя"
     lines = [
         head,
-        f"Плитка {tile.width_mm:.0f}×{tile.height_mm:.0f}, шов {fmt_mm(tile.joint_mm)} мм",
+        f"Плитка {tile.width_mm:.0f}×{tile.height_mm:.0f} ({lying}), "
+        f"шов {fmt_mm(tile.joint_mm)} мм",
         f"Класть: <b>{tiles} шт</b> (резаных {cuts})",
         "",
         "<b>Купить:</b>",
@@ -660,8 +664,14 @@ async def _redraw(message: Message, user_id: int, storage: Storage, project_id: 
 
     saved_all = [payload_to_surface(row.dump()) for row in project.surfaces]
     head = saved_all[0]
-    walls_tile = _wall_tile(
-        [s.surface for s in saved_all], head.tile, head.pattern, head.start_from.value
+    # Мастер повернул плитку сам — берём как есть. Иначе бот тут же перевернёт её
+    # обратно «как лучше», и кнопка поворота будет не работать.
+    walls_tile = (
+        None
+        if head.tile_locked
+        else _wall_tile(
+            [s.surface for s in saved_all], head.tile, head.pattern, head.start_from.value
+        )
     )
 
     layouts: list[Layout] = []
@@ -673,7 +683,7 @@ async def _redraw(message: Message, user_id: int, storage: Storage, project_id: 
             fixed or saved.tile,
             saved.pattern,
             saved.start_from.value,
-            turn=fixed is None,
+            turn=fixed is None and not saved.tile_locked,
         )
         layouts.append(layout)
         materials.append(
@@ -692,6 +702,22 @@ async def _redraw(message: Message, user_id: int, storage: Storage, project_id: 
 
 
 # --- Фото плитки и цвет затирки ----------------------------------------------
+
+
+@router.callback_query(F.data.startswith("rotate:"))
+async def rotate_tile(call: CallbackQuery, storage: Storage) -> None:
+    """Положить плитку на бок: 70×20 → 20×70.
+
+    До этого ориентацию выбирал бот — по самой широкой подрезке. Но как плитка
+    лежит, решает мастер: там рисунок и вкус заказчика, а не только подрезка.
+    """
+    project_id = int(call.data.split(":")[1])
+    if not await storage.rotate_tile(project_id, call.from_user.id):
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    await call.answer("Повернул")
+    await _redraw(call.message, call.from_user.id, storage, project_id)
 
 
 @router.callback_query(F.data.startswith("tilephoto:"))
@@ -861,7 +887,9 @@ async def got_opening(message: Message, state: FSMContext, storage: Storage) -> 
         kind=saved.surface.kind,
         openings=[*saved.surface.openings, *openings],
     )
-    layout = _lay(surface, saved.tile, saved.pattern, saved.start_from.value)
+    layout = _lay(
+        surface, saved.tile, saved.pattern, saved.start_from.value, turn=not saved.tile_locked
+    )
     materials = calc_materials(layout, waterproofing=saved.waterproofing, waste=saved.waste)
 
     await storage.update_surface(
@@ -874,6 +902,11 @@ async def got_opening(message: Message, state: FSMContext, storage: Storage) -> 
             layout.start_from,
             waterproofing=saved.waterproofing,
             waste=saved.waste,
+            # Проём — не повод забыть фото плитки, затирку и поворот: пересохраняем
+            # поверхность целиком, а не половину.
+            tile_photo_id=saved.tile_photo_id,
+            grout=saved.grout,
+            tile_locked=saved.tile_locked,
         ),
     )
     await state.set_state(None)

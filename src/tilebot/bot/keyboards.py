@@ -139,6 +139,7 @@ def after_surface(project_id: int) -> InlineKeyboardMarkup:
     """Что делать, когда поверхность посчитана."""
     b = InlineKeyboardBuilder()
     b.button(text="🔀 Сменить раскладку", callback_data=f"repat:{project_id}")
+    b.button(text="🔄 Повернуть плитку", callback_data=f"rotate:{project_id}")
     b.button(text="🖼 Фото плитки", callback_data=f"tilephoto:{project_id}")
     b.button(text="🎨 Цвет затирки", callback_data=f"grout:{project_id}")
     b.button(text="🚪 Учесть проём", callback_data=f"opening:{project_id}")
@@ -148,7 +149,7 @@ def after_surface(project_id: int) -> InlineKeyboardMarkup:
     # Смета — до работ и по прайсу. Акт — после: по факту, с материалами, если
     # мастер закупался сам.
     b.button(text="📄 Акт выполненных работ", callback_data=f"act:{project_id}")
-    b.adjust(1, 2, 1)
+    b.adjust(2, 2, 1)
     return b.as_markup()
 
 
