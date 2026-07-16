@@ -285,3 +285,27 @@ def best_orientation(
         return (worst_cut, -lay.tiles_grid)
 
     return (normal, turned) if score(normal) >= score(turned) else (turned, normal)
+
+
+def common_orientation(
+    surfaces: list[Surface],
+    tile: Tile,
+    pattern: LayoutPattern = LayoutPattern.STRAIGHT,
+    start_from: StartFrom = StartFrom.EDGE,
+) -> Tile:
+    """Одна ориентация плитки на все поверхности сразу.
+
+    Стены одной комнаты кладут одинаково: плитка, повёрнутая на второй стене
+    иначе, чем на первой, — это брак работы, даже если подрезка там вышла удачнее.
+    Поэтому ориентацию выбираем по комнате целиком, а не по каждой стене.
+    """
+    if not surfaces:
+        return tile
+
+    def score(candidate: Tile) -> tuple[float, float]:
+        layouts = [build_layout(s, candidate, pattern, start_from) for s in surfaces]
+        worst_cut = min(min(lay.x.min_cut_mm, lay.y.min_cut_mm) for lay in layouts)
+        return (worst_cut, -sum(lay.tiles_grid for lay in layouts))
+
+    turned = tile.rotated()
+    return tile if score(tile) >= score(turned) else turned

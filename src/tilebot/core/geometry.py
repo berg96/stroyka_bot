@@ -123,6 +123,79 @@ def triangle(a: float, b: float, c: float) -> AreaResult:
     )
 
 
+# Насколько противоположные стены могут разойтись, чтобы углы всё ещё считались
+# прямыми. Стены никогда не идеальны, но расхождение больше этого — уже косой угол,
+# и площадь надо брать через диагональ.
+SQUARE_TOLERANCE_M = 0.10
+
+
+def right_angled_quad(a: float, b: float, c: float, d: float) -> AreaResult:
+    """Четырёхугольник, у которого мастер подтвердил прямые углы.
+
+    Если все четыре угла прямые — это прямоугольник, и диагональ мерить незачем:
+    она пересчитывается из сторон. Противоположные стены при этом обязаны совпасть,
+    так что расхождение замеров — сигнал, что углы на самом деле косые.
+    """
+    for x in (a, b, c, d):
+        if x <= 0:
+            raise GeometryError("Сторона не может быть нулевой или отрицательной.")
+
+    for first, second, what in ((a, c, "первая и третья"), (b, d, "вторая и четвёртая")):
+        if abs(first - second) > SQUARE_TOLERANCE_M:
+            raise GeometryError(
+                f"Углы не прямые: {what} стены отличаются на "
+                f"{abs(first - second):.2f} м ({first:g} и {second:g}). "
+                "При прямых углах противоположные стены равны. "
+                "Либо перемерь, либо посчитай через диагональ — кнопка «Есть косой угол»."
+            )
+
+    # Замеры почти никогда не сходятся до миллиметра — усредняем противоположные.
+    width = (a + c) / 2
+    length = (b + d) / 2
+    note = ""
+    if abs(a - c) > 1e-9 or abs(b - d) > 1e-9:
+        note = (
+            f"Стены разошлись на {max(abs(a - c), abs(b - d)) * 100:.0f} см — "
+            f"взял среднее: {width:.2f} × {length:.2f} м."
+        )
+
+    return AreaResult(
+        area_m2=width * length,
+        perimeter_m=a + b + c + d,
+        method="прямоугольник (углы прямые, диагональ не нужна)",
+        note=note,
+        vertices=[(0.0, 0.0), (width, 0.0), (width, length), (0.0, length)],
+    )
+
+
+def _check_diagonal(a: float, b: float, c: float, d: float, diagonal: float) -> None:
+    """Диагональ должна собирать оба треугольника — иначе замер битый.
+
+    Проверяем до Герона, чтобы вместо «фигура не собирается» сказать мастеру,
+    в каких пределах диагональ вообще может быть.
+    """
+    low = max(abs(a - b), abs(c - d))
+    high = min(a + b, c + d)
+    if low < diagonal < high:
+        return
+
+    hint = ""
+    if abs(a - c) <= SQUARE_TOLERANCE_M and abs(b - d) <= SQUARE_TOLERANCE_M:
+        # Стороны как у прямоугольника — подскажем, какой была бы диагональ.
+        square_diag = math.hypot((a + c) / 2, (b + d) / 2)
+        hint = (
+            f"\n\nСудя по сторонам, у тебя прямоугольник — тогда диагональ "
+            f"должна быть ≈ {square_diag:.2f} м, а не {diagonal:g}. "
+            "Если углы прямые, диагональ вообще не нужна — жми «Углы прямые»."
+        )
+
+    raise GeometryError(
+        f"Диагональ {diagonal:g} м не сходится со сторонами: она должна быть "
+        f"больше {low:.2f} м и меньше {high:.2f} м, иначе фигура не собирается "
+        f"(стены складываются в линию). Перемерь из угла в угол.{hint}"
+    )
+
+
 def quadrilateral(a: float, b: float, c: float, d: float, diagonal: float) -> AreaResult:
     """Четырёхугольник по четырём сторонам и диагонали.
 
@@ -130,6 +203,7 @@ def quadrilateral(a: float, b: float, c: float, d: float, diagonal: float) -> Ar
     вершиной между b и c — то есть режет фигуру на треугольники (a, b, diag) и
     (c, d, diag).
     """
+    _check_diagonal(a, b, c, d, diagonal)
     t1 = _heron(a, b, diagonal)
     t2 = _heron(c, d, diagonal)
     return AreaResult(

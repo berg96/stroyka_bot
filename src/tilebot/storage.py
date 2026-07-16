@@ -9,6 +9,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import (
@@ -146,6 +147,7 @@ def surface_to_payload(
     start_from: StartFrom,
     *,
     waterproofing: bool,
+    waste: float | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -176,12 +178,25 @@ def surface_to_payload(
             "pattern": pattern.value,
             "start_from": start_from.value,
             "waterproofing": waterproofing,
+            "waste": waste,
         },
         ensure_ascii=False,
     )
 
 
-def payload_to_surface(data: dict) -> tuple[Surface, Tile, LayoutPattern, StartFrom, bool]:
+@dataclass(frozen=True)
+class SavedSurface:
+    """Поверхность, поднятая из базы — всё, что нужно, чтобы пересчитать её заново."""
+
+    surface: Surface
+    tile: Tile
+    pattern: LayoutPattern
+    start_from: StartFrom
+    waterproofing: bool
+    waste: float | None = None  # None — берём норму под раскладку
+
+
+def payload_to_surface(data: dict) -> SavedSurface:
     s = data["surface"]
     t = data["tile"]
     surface = Surface(
@@ -191,13 +206,13 @@ def payload_to_surface(data: dict) -> tuple[Surface, Tile, LayoutPattern, StartF
         kind=SurfaceKind(s["kind"]),
         openings=[Opening(**o) for o in s.get("openings", [])],
     )
-    tile = Tile(**t)
-    return (
-        surface,
-        tile,
-        LayoutPattern(data["pattern"]),
-        StartFrom(data["start_from"]),
-        bool(data.get("waterproofing", False)),
+    return SavedSurface(
+        surface=surface,
+        tile=Tile(**t),
+        pattern=LayoutPattern(data["pattern"]),
+        start_from=StartFrom(data["start_from"]),
+        waterproofing=bool(data.get("waterproofing", False)),
+        waste=data.get("waste"),
     )
 
 
@@ -253,6 +268,49 @@ class Storage:
             return False
         async with self.session() as s:
             s.add(SurfaceRow(project_id=project_id, payload_json=payload))
+            await s.commit()
+        return True
+
+    async def set_project_pattern(self, project_id: int, tg_id: int, pattern: str) -> bool:
+        """Переложить весь объект другой раскладкой.
+
+        Мастер смотрит «а если вразбежку?» — стены объекта кладут одинаково, так
+        что раскладка меняется у всех поверхностей разом. Запас сбрасываем в None:
+        под диагональ нужен свой, а прежний выбор был сделан под другую раскладку.
+        """
+        if not await self.owns(project_id, tg_id):
+            return False
+        async with self.session() as s:
+            result = await s.execute(select(SurfaceRow).where(SurfaceRow.project_id == project_id))
+            for row in result.scalars():
+                data = json.loads(row.payload_json)
+                data["pattern"] = pattern
+                data["waste"] = None
+                row.payload_json = json.dumps(data, ensure_ascii=False)
+            await s.commit()
+        return True
+
+    async def get_surface(self, surface_id: int, tg_id: int) -> SurfaceRow | None:
+        """Поверхность по id — только внутри объекта этого мастера."""
+        async with self.session() as s:
+            result = await s.execute(
+                select(SurfaceRow)
+                .join(Project, SurfaceRow.project_id == Project.id)
+                .where(SurfaceRow.id == surface_id, Project.user_id == tg_id)
+            )
+            return result.scalar_one_or_none()
+
+    async def update_surface(self, surface_id: int, tg_id: int, payload: str) -> bool:
+        async with self.session() as s:
+            result = await s.execute(
+                select(SurfaceRow)
+                .join(Project, SurfaceRow.project_id == Project.id)
+                .where(SurfaceRow.id == surface_id, Project.user_id == tg_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return False
+            row.payload_json = payload
             await s.commit()
         return True
 

@@ -7,7 +7,7 @@
 from dataclasses import dataclass, field
 
 from tilebot.core.layout import Layout
-from tilebot.core.materials import MaterialLine, Materials, merge_materials
+from tilebot.core.materials import MaterialLine, Materials, merge_materials, tile_name
 from tilebot.core.models import LayoutPattern, SurfaceKind
 
 # Надбавка за сложную раскладку: резать больше, класть дольше.
@@ -133,7 +133,7 @@ def build_estimate(
     if include_materials_cost:
         for lay, m in zip(layouts, materials, strict=True):
             if lay.tile.price_per_m2:
-                key = f"Плитка {lay.tile.width_mm:.0f}×{lay.tile.height_mm:.0f}"
+                key = tile_name(lay.tile)
                 cost = m.tile_area_with_waste_m2 * lay.tile.price_per_m2
                 est.material_costs[key] = est.material_costs.get(key, 0.0) + round(cost, 2)
 

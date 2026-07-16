@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from tilebot.core.layout import Layout
 from tilebot.core.models import StartFrom
+from tilebot.core.units import fmt_mm
 
 # Палитра: спокойный чертёж, подрезка — тёплым акцентом.
 BG = (250, 250, 249)
@@ -110,7 +111,7 @@ def render_layout(layout: Layout, title: str | None = None) -> bytes:
     head = title or surface.name
     d.text((MARGIN, 22), head, fill=TEXT, font=f_title, anchor="lm")
     sub = (
-        f"плитка {tile.width_mm:.0f}×{tile.height_mm:.0f} мм · шов {tile.joint_mm:.0f} мм · "
+        f"плитка {tile.width_mm:.0f}×{tile.height_mm:.0f} мм · шов {fmt_mm(tile.joint_mm)} мм · "
         f"{layout.tiles_grid} шт, из них резаных {layout.cuts_count}"
     )
     d.text((MARGIN, 46), sub, fill=MUTED, font=f_small, anchor="lm")

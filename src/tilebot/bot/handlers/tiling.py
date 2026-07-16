@@ -1,4 +1,9 @@
-"""Основной сценарий: объект → поверхность → плитка → схема, материалы, советы."""
+"""Основной сценарий: объект → поверхности → плитка → схемы, материалы, советы.
+
+Мастер меряет комнату целиком, а не стену за стеной: в ванной четыре стены кладут
+одной плиткой, и закупка нужна одна. Поэтому «Комната целиком» спрашивает стены по
+кругу и высоту, а параметры плитки — один раз на всю комнату.
+"""
 
 import logging
 
@@ -6,38 +11,66 @@ from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InputMediaPhoto, Message
 
 from tilebot.bot import keyboards as kb
-from tilebot.bot.parse import ParseError, dimensions, name_and_numbers, numbers, to_mm
+from tilebot.bot.parse import (
+    ParseError,
+    dimensions,
+    meters,
+    name_and_numbers,
+    numbers,
+    single_number,
+    to_mm,
+)
 from tilebot.core.estimate import money
-from tilebot.core.layout import Layout, best_orientation
-from tilebot.core.materials import Materials, calc_materials
-from tilebot.core.models import LayoutPattern, Opening, StartFrom, Surface, SurfaceKind, Tile
+from tilebot.core.layout import Layout, best_orientation, build_layout, common_orientation
+from tilebot.core.materials import Materials, calc_materials, merge_materials
+from tilebot.core.models import (
+    WASTE_BY_PATTERN,
+    LayoutPattern,
+    Opening,
+    StartFrom,
+    Surface,
+    SurfaceKind,
+    Tile,
+)
+from tilebot.core.room import floor_dims, room_surfaces
+from tilebot.core.units import fmt_mm
 from tilebot.render.scheme import render_layout
-from tilebot.storage import Storage, surface_to_payload
+from tilebot.storage import Storage, payload_to_surface, surface_to_payload
 
 router = Router(name="tiling")
 logger = logging.getLogger(__name__)
 
-
 class Tiling(StatesGroup):
     project_title = State()
+    room_walls = State()
+    room_height = State()
     surface_kind = State()
     surface_size = State()
-    openings = State()
     tile_size = State()
-    tile_details = State()
-    pattern = State()
-    start_from = State()
-    waterproofing = State()
+    joint_custom = State()
+    thickness = State()
+    price = State()
+    per_pack = State()
+    opening_size = State()
 
 
 @router.message(F.text == "🧱 Плитка")
 async def start_tiling(message: Message, state: FSMContext) -> None:
     await state.clear()
+    await message.answer("Что считаем?", reply_markup=kb.TILING_MODE)
+
+
+@router.callback_query(F.data.startswith("mode:"))
+async def pick_mode(call: CallbackQuery, state: FSMContext) -> None:
+    mode = call.data.split(":", 1)[1]
+    await state.clear()
+    await state.update_data(mode=mode)
     await state.set_state(Tiling.project_title)
-    await message.answer(
+    await call.answer()
+    await call.message.answer(
         "Как назовём объект?\n\n<i>Например: «Ванная, Борзова 12» — чтобы потом найти.</i>"
     )
 
@@ -50,8 +83,89 @@ async def got_title(message: Message, state: FSMContext, storage: Storage) -> No
         return
 
     project = await storage.create_project(message.from_user.id, title)
-    await state.update_data(project_id=project.id, surface_no=0)
-    await _ask_surface_kind(message, state)
+    data = await state.get_data()
+    await state.update_data(project_id=project.id, title=title, surface_no=0)
+
+    if data.get("mode") == "room":
+        await state.set_state(Tiling.room_walls)
+        await message.answer(
+            "Обмерь комнату <b>по кругу</b> — длина каждой стены через пробел:\n\n"
+            "<code>2 1.8 2 1.8</code>\n\n"
+            "<i>Сколько стен — столько чисел. Высоту спрошу отдельно, "
+            "плитку и шов — один раз на всю комнату.</i>"
+        )
+    else:
+        await _ask_surface_kind(message, state)
+
+
+# --- Комната целиком ---------------------------------------------------------
+
+
+@router.message(Tiling.room_walls)
+async def got_room_walls(message: Message, state: FSMContext) -> None:
+    try:
+        walls = meters(message.text or "")
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>2 1.8 2 1.8</code>")
+        return
+
+    if len(walls) < 2:
+        await message.answer("Нужно хотя бы две стены: <code>2 1.8 2 1.8</code>")
+        return
+
+    await state.update_data(walls=walls)
+    await state.set_state(Tiling.room_height)
+    await message.answer(
+        f"Стен: <b>{len(walls)}</b>, периметр {sum(walls):.2f} м.\n\n"
+        "Теперь <b>высота</b> — до потолка или докуда кладём плитку:\n\n"
+        "<code>2.7</code>"
+    )
+
+
+# Высота, при которой замер точно перепутан с единицами: «270» — это 2,7 м в
+# сантиметрах, а по общему правилу вышло бы 27 см. Молча считать такое нельзя.
+MIN_HEIGHT_M = 1.0
+MAX_HEIGHT_M = 6.0
+
+
+@router.message(Tiling.room_height)
+async def got_room_height(message: Message, state: FSMContext) -> None:
+    try:
+        (height_m,) = meters(message.text or "", count=1)
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>2.7</code>")
+        return
+
+    if not MIN_HEIGHT_M <= height_m <= MAX_HEIGHT_M:
+        await message.answer(
+            f"Высота {height_m:.2f} м — это точно так? Похоже, единицы перепутаны.\n\n"
+            "Напиши в метрах (<code>2.7</code>) или в миллиметрах (<code>2700</code>)."
+        )
+        return
+
+    data = await state.get_data()
+    walls = data["walls"]
+
+    await state.update_data(height_m=height_m)
+
+    # Пол предлагаем только там, где его можно посчитать по стенам: у прямоугольной
+    # комнаты. Кривую пусть меряет через «📐 Площадь» — врать площадью не будем.
+    if len(walls) == 4 and floor_dims(walls) is not None:
+        await message.answer("Пол тоже плиткой?", reply_markup=kb.ROOM_FLOOR)
+        return
+
+    await state.update_data(with_floor=False)
+    await _ask_tile(message, state)
+
+
+@router.callback_query(F.data.startswith("floor:"))
+async def got_room_floor(call: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(with_floor=call.data.endswith("1"))
+    await call.answer()
+    await _ask_tile(call.message, state)
+
+
+# --- Одна поверхность --------------------------------------------------------
 
 
 async def _ask_surface_kind(message: Message, state: FSMContext) -> None:
@@ -66,7 +180,12 @@ async def add_surface(call: CallbackQuery, state: FSMContext) -> None:
     project_id = int(call.data.split(":")[1])
     data = await state.get_data()
     await state.set_data(
-        {"project_id": project_id, "surface_no": data.get("surface_no", 0)}
+        {
+            "project_id": project_id,
+            "surface_no": data.get("surface_no", 0),
+            "title": data.get("title", ""),
+            "mode": "single",
+        }
     )
     await call.answer()
     await _ask_surface_kind(call.message, state)
@@ -102,16 +221,546 @@ async def got_size(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(width_mm=width, height_mm=height)
-    await state.set_state(Tiling.openings)
-    data = await state.get_data()
-    what = "дверь, окно, короб" if data["kind"] == "wall" else "короб, ванна"
+    await _ask_tile(message, state)
+
+
+# --- Плитка: размер, шов, толщина, цена --------------------------------------
+
+
+async def _ask_tile(message: Message, state: FSMContext) -> None:
+    await state.set_state(Tiling.tile_size)
     await message.answer(
-        f"Есть что вычесть ({what})?\n\n"
-        "Пиши размерами: <code>дверь 0.8 2.1</code>\n"
-        "Несколько — с новой строки. Если знаешь, где именно, добавь отступ слева и снизу: "
-        "<code>дверь 0.8 2.1 от 1.9 0</code>\n\n"
-        "<i>С координатами я не посчитаю плитку, которая уходит в проём, — точнее выйдет.</i>",
+        "Размер плитки — <b>ширина и высота</b>:\n\n"
+        "<code>60 30</code> (см)  или  <code>600 300</code> (мм)\n"
+        "<i>Как класть — вдоль или поперёк — подскажу сам.</i>"
+    )
+
+
+@router.message(Tiling.tile_size)
+async def got_tile_size(message: Message, state: FSMContext) -> None:
+    try:
+        values = numbers(message.text or "")
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>60 30</code>")
+        return
+    if len(values) != 2:
+        await message.answer("Нужно два числа: <code>60 30</code>")
+        return
+    if values[0] <= 0 or values[1] <= 0:
+        await message.answer("Размер плитки должен быть больше нуля: <code>60 30</code>")
+        return
+
+    # Плитку меряют в сантиметрах («шестьдесят на тридцать»), но пишут и в мм.
+    def tile_mm(v: float) -> float:
+        return v * 10 if v < 200 else v
+
+    await state.update_data(tile_w=tile_mm(values[0]), tile_h=tile_mm(values[1]))
+    await _ask_joint(message, state)
+
+
+async def _ask_joint(message: Message, state: FSMContext) -> None:
+    # Состояние держим на «своём размере»: мастер может ткнуть кнопку, а может
+    # сразу написать «1,4» — и то, и другое должно сработать.
+    await state.set_state(Tiling.joint_custom)
+    await message.answer(
+        "Какой шов?\n\n<i>Или напиши свой: <code>1,4</code></i>", reply_markup=kb.JOINTS
+    )
+
+
+@router.callback_query(F.data.startswith("joint:"))
+async def got_joint(call: CallbackQuery, state: FSMContext) -> None:
+    raw = call.data.split(":", 1)[1]
+    await call.answer()
+
+    if raw == "custom":
+        await state.set_state(Tiling.joint_custom)
+        await call.message.answer(
+            "Толщина шва в миллиметрах:\n\n<code>1.4</code>\n"
+            "<i>Можно с запятой — 1,4 так и посчитаю, не округлю.</i>"
+        )
+        return
+
+    await _joint_done(call.message, state, float(raw))
+
+
+@router.message(Tiling.joint_custom)
+async def got_joint_custom(message: Message, state: FSMContext) -> None:
+    try:
+        joint = single_number(message.text or "", minimum=0.1, maximum=20)
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>1.4</code>", reply_markup=kb.JOINTS)
+        return
+
+    await _joint_done(message, state, joint)
+
+
+async def _joint_done(message: Message, state: FSMContext, joint: float) -> None:
+    await state.update_data(joint_mm=joint)
+    await state.set_state(Tiling.thickness)
+    await message.answer(
+        f"Шов <b>{fmt_mm(joint)} мм</b>. Толщина плитки?\n\n"
+        "<i>Или напиши свою: <code>12</code></i>",
+        reply_markup=kb.THICKNESS,
+    )
+
+
+@router.callback_query(F.data.startswith("thick:"))
+async def got_thickness(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    await _thickness_done(call.message, state, float(call.data.split(":", 1)[1]))
+
+
+@router.message(Tiling.thickness)
+async def got_thickness_custom(message: Message, state: FSMContext) -> None:
+    try:
+        thickness = single_number(message.text or "", minimum=1, maximum=50)
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>12</code>", reply_markup=kb.THICKNESS)
+        return
+
+    await _thickness_done(message, state, thickness)
+
+
+async def _thickness_done(message: Message, state: FSMContext, thickness: float) -> None:
+    await state.update_data(thickness_mm=thickness)
+    await state.set_state(Tiling.price)
+    await message.answer(
+        "Цена плитки за м², если считаем смету:\n\n<code>1450</code>",
         reply_markup=kb.SKIP,
+    )
+
+
+@router.message(Tiling.price)
+async def got_price(message: Message, state: FSMContext) -> None:
+    try:
+        price = single_number(message.text or "", minimum=0)
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>1450</code>", reply_markup=kb.SKIP)
+        return
+
+    await state.update_data(price_per_m2=price or None)
+    await _ask_per_pack(message, state)
+
+
+@router.callback_query(Tiling.price, F.data == "skip")
+async def skip_price(call: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(price_per_m2=None)
+    await call.answer()
+    await _ask_per_pack(call.message, state)
+
+
+async def _ask_per_pack(message: Message, state: FSMContext) -> None:
+    await state.set_state(Tiling.per_pack)
+    await message.answer(
+        "Штук в упаковке — тогда посчитаю, сколько пачек брать:\n\n<code>8</code>",
+        reply_markup=kb.SKIP,
+    )
+
+
+@router.message(Tiling.per_pack)
+async def got_per_pack(message: Message, state: FSMContext) -> None:
+    try:
+        per_pack = single_number(message.text or "", minimum=0)
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>8</code>", reply_markup=kb.SKIP)
+        return
+
+    await state.update_data(per_pack=int(per_pack) or None)
+    await _ask_pattern(message, state)
+
+
+@router.callback_query(Tiling.per_pack, F.data == "skip")
+async def skip_per_pack(call: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(per_pack=None)
+    await call.answer()
+    await _ask_pattern(call.message, state)
+
+
+# --- Раскладка, запас, гидроизоляция -----------------------------------------
+
+
+async def _ask_pattern(message: Message, state: FSMContext) -> None:
+    await state.set_state(None)
+    await message.answer("Как кладём?", reply_markup=kb.PATTERNS)
+
+
+@router.callback_query(F.data.startswith("pat:"))
+async def got_pattern(call: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(pattern=call.data.split(":", 1)[1])
+    await call.answer()
+    await call.message.answer(
+        "Откуда начинаем ряд?\n\n"
+        "<i>От угла — целая плитка в углу, вся подрезка уходит в другой край. "
+        "От центра — подрезка делится поровну на два края, смотрится аккуратнее.</i>",
+        reply_markup=kb.START_FROM,
+    )
+
+
+@router.callback_query(F.data.startswith("start:"))
+async def got_start(call: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(start_from=call.data.split(":", 1)[1])
+    await call.answer()
+
+    data = await state.get_data()
+    suggested = round(WASTE_BY_PATTERN[LayoutPattern(data["pattern"])] * 100)
+    await call.message.answer(
+        f"Запас плитки на бой и подрезку? <i>Под эту раскладку советую {suggested}%.</i>",
+        reply_markup=kb.waste_options(suggested),
+    )
+
+
+@router.callback_query(F.data.startswith("waste:"))
+async def got_waste(call: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(waste=int(call.data.split(":", 1)[1]) / 100)
+    await call.answer()
+    await call.message.answer("Гидроизоляция нужна?", reply_markup=kb.YES_NO_WATERPROOF)
+
+
+@router.callback_query(F.data.startswith("wp:"))
+async def got_waterproofing(call: CallbackQuery, state: FSMContext, storage: Storage) -> None:
+    waterproofing = call.data.endswith("1")
+    await call.answer()
+    data = await state.get_data()
+
+    if data.get("mode") == "room":
+        surfaces = room_surfaces(
+            data["walls"], data["height_m"], with_floor=data.get("with_floor", False)
+        )
+    else:
+        surfaces = [
+            Surface(
+                name=("Стена" if data["kind"] == "wall" else "Пол")
+                + f" {data.get('surface_no', 0) + 1}",
+                width_mm=data["width_mm"],
+                height_mm=data["height_mm"],
+                kind=SurfaceKind(data["kind"]),
+            )
+        ]
+
+    tile = Tile(
+        width_mm=data["tile_w"],
+        height_mm=data["tile_h"],
+        thickness_mm=data["thickness_mm"],
+        joint_mm=data["joint_mm"],
+        per_pack=data.get("per_pack"),
+        price_per_m2=data.get("price_per_m2"),
+    )
+    pattern = LayoutPattern(data["pattern"])
+    waste = data.get("waste")
+
+    layouts: list[Layout] = []
+    materials: list[Materials] = []
+    walls_tile = _wall_tile(surfaces, tile, pattern, data["start_from"])
+    for surface in surfaces:
+        # Стены комнаты кладём одной ориентацией; пол сам по себе.
+        fixed = walls_tile if surface.kind is SurfaceKind.WALL else None
+        layout = _lay(surface, fixed or tile, pattern, data["start_from"], turn=fixed is None)
+        layouts.append(layout)
+        materials.append(calc_materials(layout, waterproofing=waterproofing, waste=waste))
+
+        saved = await storage.add_surface(
+            data["project_id"],
+            call.from_user.id,
+            surface_to_payload(
+                layout.surface,
+                layout.tile,
+                layout.pattern,
+                layout.start_from,
+                waterproofing=waterproofing,
+                waste=waste,
+            ),
+        )
+        if not saved:
+            await state.clear()
+            await call.message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
+            return
+
+    await state.update_data(surface_no=data.get("surface_no", 0) + len(surfaces))
+    await state.set_state(None)
+    await _show_result(call.message, data, layouts, materials, waste)
+
+
+def _wall_tile(
+    surfaces: list[Surface], tile: Tile, pattern: LayoutPattern, start_raw: str
+) -> Tile | None:
+    """Ориентация плитки, общая для всех стен. None — стен меньше двух, выбирать нечего."""
+    walls = [s for s in surfaces if s.kind is SurfaceKind.WALL]
+    if len(walls) < 2:
+        return None
+    start = StartFrom.EDGE if start_raw == "auto" else StartFrom(start_raw)
+    return common_orientation(walls, tile, pattern, start)
+
+
+def _lay(
+    surface: Surface,
+    tile: Tile,
+    pattern: LayoutPattern,
+    start_raw: str,
+    *,
+    turn: bool = True,
+) -> Layout:
+    """Разложить поверхность.
+
+    turn=False — ориентация плитки уже выбрана снаружи (стены комнаты кладутся
+    одинаково), поворачивать её под эту стену нельзя.
+    «Реши сам» — перебор стартов, а ориентации — только если разрешено вертеть.
+    """
+    starts = (
+        [StartFrom.EDGE, StartFrom.CENTER] if start_raw == "auto" else [StartFrom(start_raw)]
+    )
+    candidates = [
+        best_orientation(surface, tile, pattern, start)[0]
+        if turn
+        else build_layout(surface, tile, pattern, start)
+        for start in starts
+    ]
+    return max(candidates, key=lambda lay: min(lay.x.min_cut_mm, lay.y.min_cut_mm))
+
+
+async def _show_result(
+    message: Message,
+    data: dict,
+    layouts: list[Layout],
+    materials: list[Materials],
+    waste: float | None,
+) -> None:
+    """Схемы всех поверхностей плюс один список закупки на них."""
+    title = data.get("title", "")
+    project_id = data["project_id"]
+
+    if len(layouts) == 1:
+        png = render_layout(layouts[0], title=f"{layouts[0].surface.name} — {title}".strip(" —"))
+        await message.answer_photo(
+            BufferedInputFile(png, filename="scheme.png"),
+            caption=_caption(layouts, materials, waste),
+            reply_markup=kb.after_surface(project_id),
+        )
+        return
+
+    # Комната: схемы альбомом, чтобы не сыпать сообщениями, а закупка — одна.
+    media = [
+        InputMediaPhoto(
+            media=BufferedInputFile(
+                render_layout(lay, title=f"{lay.surface.name} — {title}".strip(" —")),
+                filename=f"scheme_{i}.png",
+            )
+        )
+        for i, lay in enumerate(layouts, start=1)
+    ]
+    for chunk in (media[i : i + 10] for i in range(0, len(media), 10)):
+        await message.answer_media_group(chunk)
+
+    await message.answer(
+        _caption(layouts, materials, waste),
+        reply_markup=kb.after_surface(project_id),
+    )
+
+
+def _walls_word(n: int) -> str:
+    """«1 стена», «4 стены», «5 стен» — бот пишет мастеру, а не в лог."""
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} стена"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} стены"
+    return f"{n} стен"
+
+
+def _caption(layouts: list[Layout], materials: list[Materials], waste: float | None) -> str:
+    """Сводка по посчитанным поверхностям: площадь, плитка, закупка одним списком."""
+    tile = layouts[0].tile
+    area = sum(lay.surface.net_area_m2 for lay in layouts)
+    tiles = sum(lay.tiles_grid for lay in layouts)
+    cuts = sum(lay.cuts_count for lay in layouts)
+    merged = merge_materials(materials)
+
+    if len(layouts) == 1:
+        head = f"<b>{layouts[0].surface.name}</b> — {area:.2f} м²"
+    else:
+        walls = sum(1 for lay in layouts if lay.surface.kind is SurfaceKind.WALL)
+        floor = " + пол" if any(lay.surface.kind is SurfaceKind.FLOOR for lay in layouts) else ""
+        head = f"<b>Комната целиком</b> — {_walls_word(walls)}{floor}, {area:.2f} м²"
+
+    lines = [
+        head,
+        f"Плитка {tile.width_mm:.0f}×{tile.height_mm:.0f}, шов {fmt_mm(tile.joint_mm)} мм",
+        f"Класть: <b>{tiles} шт</b> (резаных {cuts})",
+        "",
+        "<b>Купить:</b>",
+    ]
+    for line in merged:
+        note = f" <i>({line.note})</i>" if line.note else ""
+        lines.append(f"• {line.name}: <b>{line.format_qty()} {line.unit}</b>{note}")
+
+    if tile.price_per_m2:
+        cost = sum(m.tile_area_with_waste_m2 for m in materials) * tile.price_per_m2
+        lines.append(f"\nПлитка на {money(cost)}")
+
+    # Советы у стен одинаковой высоты повторяются — показываем каждый один раз.
+    seen: list[str] = []
+    for lay in layouts:
+        for advice in lay.advice:
+            if advice not in seen:
+                seen.append(advice)
+    if seen:
+        lines.append("")
+        lines += [f"💡 {a}" for a in seen]
+
+    return "\n".join(lines)
+
+
+# --- Смена раскладки и проёмы ------------------------------------------------
+
+
+@router.callback_query(F.data.startswith("repat:"))
+async def ask_repattern(call: CallbackQuery, storage: Storage) -> None:
+    project_id = int(call.data.split(":")[1])
+    project = await storage.get_project(project_id, call.from_user.id)
+    if project is None or not project.surfaces:
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    current = payload_to_surface(project.surfaces[0].dump()).pattern
+    await call.answer()
+    await call.message.answer(
+        "Переложить объект другой раскладкой — посмотреть, как выйдет:",
+        reply_markup=kb.repattern(project_id, current),
+    )
+
+
+@router.callback_query(F.data.startswith("setpat:"))
+async def do_repattern(call: CallbackQuery, state: FSMContext, storage: Storage) -> None:
+    _, raw_id, raw_pattern = call.data.split(":")
+    project_id = int(raw_id)
+
+    if not await storage.set_project_pattern(project_id, call.from_user.id, raw_pattern):
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    project = await storage.get_project(project_id, call.from_user.id)
+    await call.answer("Пересчитал")
+
+    saved_all = [payload_to_surface(row.dump()) for row in project.surfaces]
+    pattern = LayoutPattern(raw_pattern)
+    start_raw = saved_all[0].start_from.value
+    walls_tile = _wall_tile(
+        [s.surface for s in saved_all], saved_all[0].tile, pattern, start_raw
+    )
+
+    layouts: list[Layout] = []
+    materials: list[Materials] = []
+    for saved in saved_all:
+        fixed = walls_tile if saved.surface.kind is SurfaceKind.WALL else None
+        layout = _lay(
+            saved.surface,
+            fixed or saved.tile,
+            saved.pattern,
+            saved.start_from.value,
+            turn=fixed is None,
+        )
+        layouts.append(layout)
+        materials.append(
+            calc_materials(layout, waterproofing=saved.waterproofing, waste=saved.waste)
+        )
+
+    await state.update_data(project_id=project_id, title=project.title)
+    await _show_result(
+        call.message,
+        {"project_id": project_id, "title": project.title},
+        layouts,
+        materials,
+        None,
+    )
+
+
+@router.callback_query(F.data.startswith("opening:"))
+async def ask_opening(call: CallbackQuery, state: FSMContext, storage: Storage) -> None:
+    project_id = int(call.data.split(":")[1])
+    project = await storage.get_project(project_id, call.from_user.id)
+    if project is None or not project.surfaces:
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    await call.answer()
+    if len(project.surfaces) == 1:
+        await _ask_opening_size(call.message, project.surfaces[0].id, state=state)
+        return
+
+    await call.message.answer(
+        "В какой стене проём?",
+        reply_markup=kb.surfaces_list(project_id, project.surfaces, "openat"),
+    )
+
+
+@router.callback_query(F.data.startswith("openat:"))
+async def pick_opening_surface(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    await _ask_opening_size(call.message, int(call.data.split(":")[1]), state=state)
+
+
+async def _ask_opening_size(message: Message, surface_id: int, *, state: FSMContext) -> None:
+    await state.update_data(surface_id=surface_id)
+    await state.set_state(Tiling.opening_size)
+    await message.answer(
+        "Размер проёма — <b>ширина и высота</b>:\n\n"
+        "<code>дверь 0.8 2.1</code>\n"
+        "Несколько — с новой строки. Знаешь, где именно, — добавь отступ слева и снизу: "
+        "<code>дверь 0.8 2.1 от 1.9 0</code>\n\n"
+        "<i>С координатами не посчитаю плитку, уходящую в проём, — выйдет точнее.</i>",
+    )
+
+
+@router.message(Tiling.opening_size)
+async def got_opening(message: Message, state: FSMContext, storage: Storage) -> None:
+    data = await state.get_data()
+    surface_id = data.get("surface_id")
+    if surface_id is None:
+        await state.set_state(None)
+        await message.answer("Не понял, к какой стене проём. Открой объект заново.")
+        return
+
+    try:
+        openings = _parse_openings(message.text or "")
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>дверь 0.8 2.1</code>")
+        return
+
+    row = await storage.get_surface(surface_id, message.from_user.id)
+    if row is None:
+        await state.set_state(None)
+        await message.answer("Поверхность не найдена.", reply_markup=kb.MAIN_MENU)
+        return
+
+    saved = payload_to_surface(row.dump())
+    surface = Surface(
+        name=saved.surface.name,
+        width_mm=saved.surface.width_mm,
+        height_mm=saved.surface.height_mm,
+        kind=saved.surface.kind,
+        openings=[*saved.surface.openings, *openings],
+    )
+    layout = _lay(surface, saved.tile, saved.pattern, saved.start_from.value)
+    materials = calc_materials(layout, waterproofing=saved.waterproofing, waste=saved.waste)
+
+    await storage.update_surface(
+        surface_id,
+        message.from_user.id,
+        surface_to_payload(
+            layout.surface,
+            layout.tile,
+            layout.pattern,
+            layout.start_from,
+            waterproofing=saved.waterproofing,
+            waste=saved.waste,
+        ),
+    )
+    await state.set_state(None)
+
+    project_id = row.project_id
+    png = render_layout(layout, title=surface.name)
+    await message.answer_photo(
+        BufferedInputFile(png, filename="scheme.png"),
+        caption=_caption([layout], [materials], saved.waste),
+        reply_markup=kb.after_surface(project_id),
     )
 
 
@@ -148,203 +797,6 @@ def _parse_openings(text: str) -> list[Opening]:
             )
         )
     return openings
-
-
-@router.message(Tiling.openings)
-async def got_openings(message: Message, state: FSMContext) -> None:
-    try:
-        openings = _parse_openings(message.text or "")
-    except ParseError as e:
-        await message.answer(f"{e}\n\nПример: <code>дверь 0.8 2.1</code>", reply_markup=kb.SKIP)
-        return
-
-    await state.update_data(
-        openings=[
-            {
-                "name": o.name,
-                "width_mm": o.width_mm,
-                "height_mm": o.height_mm,
-                "x_mm": o.x_mm,
-                "y_mm": o.y_mm,
-            }
-            for o in openings
-        ]
-    )
-    await _ask_tile(message, state)
-
-
-@router.callback_query(Tiling.openings, F.data == "skip")
-async def skip_openings(call: CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(openings=[])
-    await call.answer()
-    await _ask_tile(call.message, state)
-
-
-async def _ask_tile(message: Message, state: FSMContext) -> None:
-    await state.set_state(Tiling.tile_size)
-    await message.answer(
-        "Размер плитки — <b>ширина и высота</b>:\n\n"
-        "<code>60 30</code> (см)  или  <code>600 300</code> (мм)\n"
-        "<i>Как класть — вдоль или поперёк — подскажу сам.</i>"
-    )
-
-
-@router.message(Tiling.tile_size)
-async def got_tile_size(message: Message, state: FSMContext) -> None:
-    try:
-        values = numbers(message.text or "")
-    except ParseError as e:
-        await message.answer(f"{e}\n\nПример: <code>60 30</code>")
-        return
-    if len(values) != 2:
-        await message.answer("Нужно два числа: <code>60 30</code>")
-        return
-    if values[0] <= 0 or values[1] <= 0:
-        await message.answer("Размер плитки должен быть больше нуля: <code>60 30</code>")
-        return
-
-    # Плитку меряют в сантиметрах («шестьдесят на тридцать»), но пишут и в мм.
-    def tile_mm(v: float) -> float:
-        return v * 10 if v < 200 else v
-
-    await state.update_data(tile_w=tile_mm(values[0]), tile_h=tile_mm(values[1]))
-    await state.set_state(Tiling.tile_details)
-    await message.answer(
-        "Шов, толщина плитки, штук в упаковке, цена за м² — через пробел:\n\n"
-        "<code>2 9 8 1450</code>\n"
-        "<i>Что не знаешь — ставь 0. Можно просто <code>2</code> — остальное по умолчанию.</i>"
-    )
-
-
-@router.message(Tiling.tile_details)
-async def got_tile_details(message: Message, state: FSMContext) -> None:
-    try:
-        values = numbers(message.text or "")
-    except ParseError as e:
-        await message.answer(f"{e}\n\nПример: <code>2 9 8 1450</code>")
-        return
-
-    joint = values[0] if values else 2.0
-    thickness = values[1] if len(values) > 1 and values[1] else 9.0
-    per_pack = int(values[2]) if len(values) > 2 and values[2] else None
-    price = values[3] if len(values) > 3 and values[3] else None
-
-    await state.update_data(
-        joint_mm=joint, thickness_mm=thickness, per_pack=per_pack, price_per_m2=price
-    )
-    await state.set_state(Tiling.pattern)
-    await message.answer("Как кладём?", reply_markup=kb.PATTERNS)
-
-
-@router.callback_query(Tiling.pattern, F.data.startswith("pat:"))
-async def got_pattern(call: CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(pattern=call.data.split(":", 1)[1])
-    await state.set_state(Tiling.start_from)
-    await call.answer()
-    await call.message.answer(
-        "Откуда начинаем ряд?\n\n"
-        "<i>От угла — целая плитка в углу, вся подрезка уходит в другой край. "
-        "От центра — подрезка делится поровну на два края, смотрится аккуратнее.</i>",
-        reply_markup=kb.START_FROM,
-    )
-
-
-@router.callback_query(Tiling.start_from, F.data.startswith("start:"))
-async def got_start(call: CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(start_from=call.data.split(":", 1)[1])
-    await state.set_state(Tiling.waterproofing)
-    await call.answer()
-    await call.message.answer("Гидроизоляция нужна?", reply_markup=kb.YES_NO_WATERPROOF)
-
-
-@router.callback_query(Tiling.waterproofing, F.data.startswith("wp:"))
-async def got_waterproofing(
-    call: CallbackQuery, state: FSMContext, storage: Storage
-) -> None:
-    waterproofing = call.data.endswith("1")
-    await call.answer()
-    data = await state.get_data()
-
-    surface = Surface(
-        name=("Стена" if data["kind"] == "wall" else "Пол") + f" {data.get('surface_no', 0) + 1}",
-        width_mm=data["width_mm"],
-        height_mm=data["height_mm"],
-        kind=SurfaceKind(data["kind"]),
-        openings=[Opening(**o) for o in data.get("openings", [])],
-    )
-    tile = Tile(
-        width_mm=data["tile_w"],
-        height_mm=data["tile_h"],
-        thickness_mm=data["thickness_mm"],
-        joint_mm=data["joint_mm"],
-        per_pack=data.get("per_pack"),
-        price_per_m2=data.get("price_per_m2"),
-    )
-    pattern = LayoutPattern(data["pattern"])
-    start_raw = data["start_from"]
-
-    if start_raw == "auto":
-        # «Реши сам» — перебираем оба старта и обе ориентации плитки.
-        candidates = [
-            best_orientation(surface, tile, pattern, StartFrom.EDGE)[0],
-            best_orientation(surface, tile, pattern, StartFrom.CENTER)[0],
-        ]
-        layout = max(candidates, key=lambda lay: min(lay.x.min_cut_mm, lay.y.min_cut_mm))
-    else:
-        start_from = StartFrom(start_raw)
-        layout, _ = best_orientation(surface, tile, pattern, start_from)
-
-    materials = calc_materials(layout, waterproofing=waterproofing)
-
-    saved = await storage.add_surface(
-        data["project_id"],
-        call.from_user.id,
-        surface_to_payload(
-            layout.surface,
-            layout.tile,
-            layout.pattern,
-            layout.start_from,
-            waterproofing=waterproofing,
-        ),
-    )
-    if not saved:
-        await state.clear()
-        await call.message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
-        return
-
-    await state.update_data(surface_no=data.get("surface_no", 0) + 1)
-    await state.set_state(None)
-
-    png = render_layout(layout, title=f"{surface.name} — {data.get('title', '')}".strip(" —"))
-    await call.message.answer_photo(
-        BufferedInputFile(png, filename="scheme.png"),
-        caption=_surface_caption(layout, materials),
-        reply_markup=kb.after_surface(data["project_id"]),
-    )
-
-
-def _surface_caption(layout: Layout, materials: Materials) -> str:
-    tile = layout.tile
-    lines = [
-        f"<b>{layout.surface.name}</b> — {layout.surface.net_area_m2:.2f} м²",
-        f"Плитка {tile.width_mm:.0f}×{tile.height_mm:.0f}, шов {tile.joint_mm:.0f} мм",
-        f"Класть: <b>{layout.tiles_grid} шт</b> (резаных {layout.cuts_count})",
-        "",
-        "<b>Купить:</b>",
-    ]
-    for line in materials.lines:
-        note = f" <i>({line.note})</i>" if line.note else ""
-        lines.append(f"• {line.name}: <b>{line.format_qty()} {line.unit}</b>{note}")
-
-    if tile.price_per_m2:
-        cost = materials.tile_area_with_waste_m2 * tile.price_per_m2
-        lines.append(f"\nПлитка на {money(cost)}")
-
-    lines.append("")
-    for advice in layout.advice:
-        lines.append(f"💡 {advice}")
-
-    return "\n".join(lines)
 
 
 @router.message(StateFilter(None), F.text.regexp(r"^\d"))

@@ -30,6 +30,64 @@ AREA_SHAPES = InlineKeyboardMarkup(
     ]
 )
 
+TILING_MODE = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="🛁 Комната целиком", callback_data="mode:room")],
+        [InlineKeyboardButton(text="▭ Одна стена или пол", callback_data="mode:single")],
+    ]
+)
+
+# Ходовые швы. «Полтора» — то, что мастер кладёт по умолчанию; 1 мм почти не
+# встречается, поэтому в кнопках его нет — только через «свой».
+JOINTS = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text="1,5 мм", callback_data="joint:1.5"),
+            InlineKeyboardButton(text="2 мм", callback_data="joint:2"),
+            InlineKeyboardButton(text="3 мм", callback_data="joint:3"),
+        ],
+        [InlineKeyboardButton(text="Свой размер", callback_data="joint:custom")],
+    ]
+)
+
+THICKNESS = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text="8 мм", callback_data="thick:8"),
+            InlineKeyboardButton(text="9 мм", callback_data="thick:9"),
+            InlineKeyboardButton(text="10 мм", callback_data="thick:10"),
+        ],
+        [InlineKeyboardButton(text="Не знаю — считай 9", callback_data="thick:9")],
+    ]
+)
+
+
+def waste_options(suggested: int) -> InlineKeyboardMarkup:
+    """Запас плитки. Подсказанный вариант помечаем — он же и норма под раскладку."""
+    b = InlineKeyboardBuilder()
+    for percent in (7, 10, 15):
+        mark = " ✓" if percent == suggested else ""
+        b.button(text=f"{percent}%{mark}", callback_data=f"waste:{percent}")
+    b.adjust(3)
+    return b.as_markup()
+
+
+ROOM_FLOOR = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Да, и пол", callback_data="floor:1"),
+            InlineKeyboardButton(text="Только стены", callback_data="floor:0"),
+        ]
+    ]
+)
+
+QUAD_ANGLES = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="📐 Углы прямые", callback_data="quad:right")],
+        [InlineKeyboardButton(text="◇ Есть косой угол", callback_data="quad:skew")],
+    ]
+)
+
 SURFACE_KIND = InlineKeyboardMarkup(
     inline_keyboard=[
         [
@@ -79,9 +137,38 @@ SKIP = InlineKeyboardMarkup(
 def after_surface(project_id: int) -> InlineKeyboardMarkup:
     """Что делать, когда поверхность посчитана."""
     b = InlineKeyboardBuilder()
+    b.button(text="🔀 Сменить раскладку", callback_data=f"repat:{project_id}")
+    b.button(text="🚪 Учесть проём", callback_data=f"opening:{project_id}")
     b.button(text="➕ Ещё стена / пол", callback_data=f"add_surface:{project_id}")
     b.button(text="🧾 Итог по объекту", callback_data=f"summary:{project_id}")
     b.button(text="💵 Смета заказчику", callback_data=f"estimate:{project_id}")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def repattern(project_id: int, current: LayoutPattern) -> InlineKeyboardMarkup:
+    """Переложить объект другой раскладкой — посмотреть и так, и так."""
+    b = InlineKeyboardBuilder()
+    titles = {
+        LayoutPattern.STRAIGHT: "Шов в шов",
+        LayoutPattern.BRICK: "Вразбежку",
+        LayoutPattern.DIAGONAL: "Диагональ",
+        LayoutPattern.HERRINGBONE: "Ёлочка",
+    }
+    for pattern, title in titles.items():
+        mark = " ✓" if pattern is current else ""
+        b.button(text=f"{title}{mark}", callback_data=f"setpat:{project_id}:{pattern.value}")
+    b.button(text="⬅️ Назад", callback_data=f"open:{project_id}")
+    b.adjust(2, 2, 1)
+    return b.as_markup()
+
+
+def surfaces_list(project_id: int, surfaces: list, action: str) -> InlineKeyboardMarkup:
+    """Выбор поверхности объекта — например, к какой стене относится проём."""
+    b = InlineKeyboardBuilder()
+    for row in surfaces:
+        b.button(text=row.dump()["surface"]["name"], callback_data=f"{action}:{row.id}")
+    b.button(text="⬅️ Назад", callback_data=f"open:{project_id}")
     b.adjust(1)
     return b.as_markup()
 

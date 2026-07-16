@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from tilebot.core.layout import Layout
 from tilebot.core.models import WASTE_BY_PATTERN, SurfaceKind, Tile
+from tilebot.core.units import fmt_mm
 
 # Гребёнка (высота зуба) по размеру плитки и средний расход сухой смеси.
 # Ключ — наибольшая сторона плитки в мм (верхняя граница диапазона).
@@ -32,12 +33,20 @@ CROSSES_PER_TILE = 4  # крестики на плитку
 
 @dataclass(frozen=True)
 class MaterialLine:
-    """Строка списка закупки."""
+    """Строка списка закупки.
+
+    area_m2/per_pack/waste заполнены только у плитки: при сводке по объекту её
+    метры и упаковки надо пересчитать от суммарного количества, а не тащить
+    подпись первой стены.
+    """
 
     name: str
     qty: float
     unit: str
     note: str = ""
+    area_m2: float | None = None
+    per_pack: int | None = None
+    waste: float | None = None
 
     def format_qty(self) -> str:
         if self.unit == "шт" or self.qty >= 100:
@@ -54,6 +63,22 @@ class Materials:
     tiles_count: int  # штук плитки с запасом
     packs: int | None
     lines: list[MaterialLine]
+
+
+def _tile_note(area_m2: float, waste: float, packs: int | None) -> str:
+    return f"{area_m2:.1f} м² с запасом {waste:.0%}" + (f", ≈{packs} уп." if packs else "")
+
+
+def tile_name(tile: Tile) -> str:
+    """Имя плитки для закупки — всегда длинной стороной вперёд.
+
+    Одна и та же плитка на разных стенах ложится по-разному (600×300 и 300×600),
+    и по имени с ориентацией закупка распадалась на две позиции. В магазине это
+    один товар.
+    """
+    long_side = max(tile.width_mm, tile.height_mm)
+    short_side = min(tile.width_mm, tile.height_mm)
+    return f"Плитка {long_side:.0f}×{short_side:.0f}"
 
 
 def trowel_for(tile: Tile) -> tuple[int, float]:
@@ -88,12 +113,17 @@ def calc_materials(
     *,
     waterproofing: bool = False,
     use_leveling_system: bool = True,
+    waste: float | None = None,
 ) -> Materials:
-    """Список закупки под одну разложенную поверхность."""
+    """Список закупки под одну разложенную поверхность.
+
+    waste — запас плитки долей (0.07 = 7%). None → норма под раскладку.
+    """
     tile = layout.tile
     surface = layout.surface
     area = surface.net_area_m2
-    waste = WASTE_BY_PATTERN[layout.pattern]
+    if waste is None:
+        waste = WASTE_BY_PATTERN[layout.pattern]
 
     # Плитку считаем по сетке раскладки, а не «площадь ÷ площадь плитки»: подрезка
     # из целой плитки, обрезки в дело идут не всегда. Запас — сверху на бой.
@@ -106,13 +136,13 @@ def calc_materials(
 
     lines: list[MaterialLine] = [
         MaterialLine(
-            name=f"Плитка {tile.width_mm:.0f}×{tile.height_mm:.0f}",
+            name=tile_name(tile),
             qty=tiles,
             unit="шт",
-            note=(
-                f"{tile_area_waste:.1f} м² с запасом {waste:.0%}"
-                + (f", ≈{packs} уп." if packs else "")
-            ),
+            note=_tile_note(tile_area_waste, waste, packs),
+            area_m2=tile_area_waste,
+            per_pack=tile.per_pack,
+            waste=waste,
         ),
         MaterialLine(
             name="Плиточный клей",
@@ -121,7 +151,7 @@ def calc_materials(
             note=f"гребёнка {teeth} мм; мешков 25 кг ≈ {math.ceil(glue / 25)}",
         ),
         MaterialLine(
-            name=f"Затирка (шов {tile.joint_mm:.0f} мм)",
+            name=f"Затирка (шов {fmt_mm(tile.joint_mm)} мм)",
             qty=max(1.0, math.ceil(grout * 10) / 10),
             unit="кг",
             note=f"{grout_kg_per_m2(tile):.2f} кг/м²",
@@ -150,7 +180,7 @@ def calc_materials(
                 name="Крестики",
                 qty=layout.tiles_grid * CROSSES_PER_TILE,
                 unit="шт",
-                note=f"{tile.joint_mm:.0f} мм",
+                note=f"{fmt_mm(tile.joint_mm)} мм",
             )
         )
 
@@ -189,17 +219,25 @@ def merge_materials(items: list[Materials]) -> list[MaterialLine]:
     потом сложил.
     """
     bucket: dict[tuple[str, str], float] = {}
-    notes: dict[tuple[str, str], str] = {}
+    first: dict[tuple[str, str], MaterialLine] = {}
+    area: dict[tuple[str, str], float] = {}
     for m in items:
         for line in m.lines:
             key = (line.name, line.unit)
             bucket[key] = bucket.get(key, 0.0) + line.qty
-            notes.setdefault(key, line.note)
+            first.setdefault(key, line)
+            if line.area_m2 is not None:
+                area[key] = area.get(key, 0.0) + line.area_m2
 
     out = []
     for (name, unit), qty in bucket.items():
-        note = notes[(name, unit)]
+        line = first[(name, unit)]
+        note = line.note
         if name == "Плиточный клей":
             note = f"мешков 25 кг ≈ {math.ceil(qty / 25)}"
+        elif key_area := area.get((name, unit)):
+            # Плитка: и метры, и упаковки считаем от всего объекта разом.
+            packs = math.ceil(qty / line.per_pack) if line.per_pack else None
+            note = _tile_note(key_area, line.waste or 0.0, packs)
         out.append(MaterialLine(name=name, qty=qty, unit=unit, note=note))
     return out

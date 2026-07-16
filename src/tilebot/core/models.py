@@ -29,11 +29,12 @@ class StartFrom(StrEnum):
     CENTER = "center"  # от центра: подрезка симметрична по краям
 
 
-# Запас материала сверх нетто-площади, доля. Диагональ и ёлочка дают больше боя
-# на подрезке — цифры из практики (прямая 10%, диагональ 15%).
+# Запас материала сверх нетто-площади, доля. Прямая раскладка — 7%: столько
+# берёт Саша на практике, магазинные «10%» заложены с перестраховкой. Диагональ
+# и ёлочка режутся косо и дают больше боя, там запас остаётся 15%.
 WASTE_BY_PATTERN: dict[LayoutPattern, float] = {
-    LayoutPattern.STRAIGHT: 0.10,
-    LayoutPattern.BRICK: 0.10,
+    LayoutPattern.STRAIGHT: 0.07,
+    LayoutPattern.BRICK: 0.07,
     LayoutPattern.DIAGONAL: 0.15,
     LayoutPattern.HERRINGBONE: 0.15,
 }

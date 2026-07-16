@@ -33,11 +33,13 @@ def _rebuild(project: Project) -> tuple[list[Layout], list[Materials], bool]:
     waterproofing = False
 
     for row in project.surfaces:
-        surface, tile, pattern, start_from, wp = payload_to_surface(row.dump())
-        layout = build_layout(surface, tile, pattern, start_from)
+        saved = payload_to_surface(row.dump())
+        layout = build_layout(saved.surface, saved.tile, saved.pattern, saved.start_from)
         layouts.append(layout)
-        materials.append(calc_materials(layout, waterproofing=wp))
-        waterproofing = waterproofing or wp
+        materials.append(
+            calc_materials(layout, waterproofing=saved.waterproofing, waste=saved.waste)
+        )
+        waterproofing = waterproofing or saved.waterproofing
 
     return layouts, materials, waterproofing
 

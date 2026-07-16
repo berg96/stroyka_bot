@@ -9,12 +9,21 @@ from tilebot.core.geometry import (
     polygon_fan,
     quadrilateral,
     rectangle,
+    right_angled_quad,
     shoelace_area,
     triangle,
 )
-from tilebot.core.layout import best_orientation, build_layout
-from tilebot.core.materials import calc_materials, grout_kg_per_m2, trowel_for
+from tilebot.core.layout import best_orientation, build_layout, common_orientation
+from tilebot.core.materials import (
+    calc_materials,
+    grout_kg_per_m2,
+    merge_materials,
+    tile_name,
+    trowel_for,
+)
 from tilebot.core.models import LayoutPattern, Opening, StartFrom, Surface, SurfaceKind, Tile
+from tilebot.core.room import floor_dims, room_surfaces
+from tilebot.core.units import fmt_mm
 
 
 class TestGeometry:
@@ -36,6 +45,33 @@ class TestGeometry:
     def test_quadrilateral_rectangle_via_diagonal(self):
         # Прямоугольник 3×4, диагональ 5 → 12 м².
         assert quadrilateral(3, 4, 3, 4, 5).area_m2 == pytest.approx(12)
+
+    def test_right_angled_quad_needs_no_diagonal(self):
+        """Ванная 2×1.8 с прямыми углами: диагональ мерить незачем."""
+        r = right_angled_quad(2, 1.8, 2, 1.8)
+        assert r.area_m2 == pytest.approx(3.6)
+        assert "диагональ не нужна" in r.method
+
+    def test_right_angled_quad_averages_imperfect_walls(self):
+        """Стены никогда не идеальны — небольшое расхождение усредняем и говорим об этом."""
+        r = right_angled_quad(2.03, 1.8, 1.99, 1.82)
+        assert r.area_m2 == pytest.approx(2.01 * 1.81)
+        assert "среднее" in r.note
+
+    def test_right_angled_quad_rejects_skewed_walls(self):
+        """Если противоположные стены разные — углы не прямые, нужна диагональ."""
+        with pytest.raises(GeometryError, match="не прямые"):
+            right_angled_quad(4, 2, 2, 2)
+
+    def test_degenerate_diagonal_suggests_the_right_one(self):
+        """Сашин ввод: квадрат 2×2 и диагональ 4 — фигура вырождается в линию.
+
+        Вместо «перемерь» подсказываем, какой диагональ должна быть на самом деле.
+        """
+        with pytest.raises(GeometryError) as e:
+            quadrilateral(2, 2, 2, 2, 4)
+        assert "2.83" in str(e.value)
+        assert "Углы прямые" in str(e.value)
 
     def test_polygon_fan_needs_right_number_of_diagonals(self):
         with pytest.raises(GeometryError, match="диагонал"):
@@ -201,9 +237,20 @@ class TestMaterials:
         assert "СВП, зажимы" in names
         assert "Гидроизоляция обмазочная" in names
 
-        # Запас 10% сверх сетки, упаковки округлены вверх.
+        # Запас сверх сетки, упаковки округлены вверх.
         assert m.tiles_count >= lay.tiles_grid
         assert m.packs == math.ceil(m.tiles_count / 8)
+
+    def test_straight_waste_is_seven_percent(self):
+        """Саша берёт 7%, а не магазинные 10% — на прямой раскладке лишнего не кладём."""
+        lay = build_layout(Surface("стена", 3000, 2500), Tile(300, 300), LayoutPattern.STRAIGHT)
+        m = calc_materials(lay)
+        assert m.tiles_count == math.ceil(lay.tiles_grid * 1.07)
+
+    def test_waste_can_be_overridden(self):
+        lay = build_layout(Surface("стена", 3000, 2500), Tile(300, 300), LayoutPattern.STRAIGHT)
+        assert calc_materials(lay, waste=0.15).tiles_count == math.ceil(lay.tiles_grid * 1.15)
+        assert calc_materials(lay, waste=0.0).tiles_count == lay.tiles_grid
 
     def test_diagonal_pattern_costs_more_tile(self):
         wall = Surface("стена", 3000, 2500)
@@ -211,3 +258,77 @@ class TestMaterials:
         straight = calc_materials(build_layout(wall, tile, LayoutPattern.STRAIGHT))
         diagonal = calc_materials(build_layout(wall, tile, LayoutPattern.DIAGONAL))
         assert diagonal.tiles_count > straight.tiles_count
+
+
+class TestUnits:
+    def test_joint_keeps_tenths(self):
+        """Шов 1,4 показывался как «1 мм» — Саша решил, что бот проигнорировал ввод."""
+        assert fmt_mm(1.4) == "1,4"
+        assert fmt_mm(1.5) == "1,5"
+
+    def test_whole_millimetres_stay_whole(self):
+        assert fmt_mm(2.0) == "2"
+        assert fmt_mm(10) == "10"
+
+    def test_grout_line_shows_the_real_joint(self):
+        lay = build_layout(Surface("стена", 2000, 2500), Tile(600, 300, joint_mm=1.4))
+        names = [line.name for line in calc_materials(lay).lines]
+        assert "Затирка (шов 1,4 мм)" in names
+
+
+class TestRoom:
+    def test_walls_become_surfaces_of_one_height(self):
+        """Ванная целиком: стены по кругу + высота — одна плитка, одна закупка."""
+        surfaces = room_surfaces([2, 1.8, 2, 1.8], 2.7, with_floor=False)
+        assert [s.name for s in surfaces] == ["Стена 1", "Стена 2", "Стена 3", "Стена 4"]
+        assert all(s.height_mm == 2700 for s in surfaces)
+        assert surfaces[0].width_mm == 2000
+        assert sum(s.gross_area_m2 for s in surfaces) == pytest.approx(2 * (2 + 1.8) * 2.7)
+
+    def test_floor_is_taken_from_the_walls(self):
+        surfaces = room_surfaces([2, 1.8, 2, 1.8], 2.7, with_floor=True)
+        floor = surfaces[-1]
+        assert floor.kind is SurfaceKind.FLOOR
+        assert floor.gross_area_m2 == pytest.approx(3.6)
+
+    def test_crooked_room_gets_no_floor(self):
+        """Пол по кривым стенам не восстановить — врать площадью не будем."""
+        assert floor_dims([2, 1.8, 2.5, 1.8]) is None
+        assert len(room_surfaces([2, 1.8, 2.5, 1.8], 2.7, with_floor=True)) == 4
+
+
+class TestPurchaseList:
+    """Закупка на комнату: то, с чем мастер поедет в магазин."""
+
+    def _room(self, tile):
+        # Ванная 2×1.8×2.7 — стены кладутся одной ориентацией.
+        walls = room_surfaces([2, 1.8, 2, 1.8], 2.7, with_floor=False)
+        fixed = common_orientation(walls, tile, LayoutPattern.STRAIGHT)
+        return [build_layout(w, fixed, LayoutPattern.STRAIGHT) for w in walls]
+
+    def test_rotated_tile_is_one_position_not_two(self):
+        """600×300 и 300×600 — одна плитка в магазине, а не две позиции в списке."""
+        assert tile_name(Tile(300, 600)) == tile_name(Tile(600, 300)) == "Плитка 600×300"
+
+        mats = [calc_materials(lay) for lay in self._room(Tile(600, 300))]
+        tiles = [line for line in merge_materials(mats) if line.name.startswith("Плитка")]
+        assert len(tiles) == 1
+
+    def test_merged_packs_count_the_whole_room(self):
+        """Упаковки считаем от всей комнаты — иначе «185 шт, ≈6 уп.»."""
+        mats = [calc_materials(lay) for lay in self._room(Tile(600, 300, per_pack=8))]
+        line = next(x for x in merge_materials(mats) if x.name.startswith("Плитка"))
+        assert line.qty == sum(m.tiles_count for m in mats)
+        assert f"≈{math.ceil(line.qty / 8)} уп." in line.note
+
+    def test_merged_tile_area_is_summed(self):
+        mats = [calc_materials(lay) for lay in self._room(Tile(600, 300, per_pack=8))]
+        line = next(x for x in merge_materials(mats) if x.name.startswith("Плитка"))
+        total = sum(m.tile_area_with_waste_m2 for m in mats)
+        assert f"{total:.1f} м²" in line.note
+
+    def test_walls_share_one_orientation(self):
+        """Плитка, повёрнутая на второй стене иначе, — это брак работы."""
+        layouts = self._room(Tile(600, 300))
+        sizes = {(lay.tile.width_mm, lay.tile.height_mm) for lay in layouts}
+        assert len(sizes) == 1

@@ -20,6 +20,7 @@ from tilebot.core.geometry import (
     polygon_fan,
     quadrilateral,
     rectangle,
+    right_angled_quad,
     triangle,
 )
 from tilebot.render.shape import render_parts, render_shape
@@ -31,6 +32,7 @@ class Area(StatesGroup):
     rect = State()
     tri = State()
     quad = State()
+    quad_right = State()
     poly_sides = State()
     poly_diagonals = State()
     composite_parts = State()
@@ -59,13 +61,11 @@ async def pick_shape(call: CallbackQuery, state: FSMContext) -> None:
         await call.message.answer("Три стороны через пробел:\n\n<code>3 4 5</code>")
 
     elif shape == "quad":
-        await state.set_state(Area.quad)
         await call.message.answer(
-            "Четыре стороны <b>по кругу</b> и <b>диагональ</b> — пять чисел:\n\n"
-            "<code>4 3 4 3 5</code>\n\n"
-            "<i>Диагональ нужна обязательно: по одним сторонам четырёхугольник не "
-            "определяется — при тех же сторонах его можно «перекосить», и площадь "
-            "изменится. Диагональ фиксирует форму. Меряй из угла в угол.</i>"
+            "Углы в комнате прямые?\n\n"
+            "<i>Если прямые — диагональ мерить не надо, посчитаю по сторонам. "
+            "Диагональ нужна только там, где стена ушла вкось.</i>",
+            reply_markup=kb.QUAD_ANGLES,
         )
 
     elif shape == "poly":
@@ -136,6 +136,37 @@ async def calc_tri(message: Message, state: FSMContext) -> None:
         await _answer(message, state, triangle(a, b, c))
     except (ParseError, GeometryError) as e:
         await message.answer(f"{e}\n\nПример: <code>3 4 5</code>")
+
+
+@router.callback_query(F.data.startswith("quad:"))
+async def pick_quad_angles(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+
+    if call.data.endswith("right"):
+        await state.set_state(Area.quad_right)
+        await call.message.answer(
+            "Четыре стороны <b>по кругу</b>, через пробел:\n\n"
+            "<code>2 1.8 2 1.8</code>\n\n"
+            "<i>Диагональ не нужна — при прямых углах она считается сама.</i>"
+        )
+    else:
+        await state.set_state(Area.quad)
+        await call.message.answer(
+            "Четыре стороны <b>по кругу</b> и <b>диагональ</b> — пять чисел:\n\n"
+            "<code>4 3 4 3 5</code>\n\n"
+            "<i>Тут диагональ обязательна: при косом угле одни стороны форму не "
+            "задают — фигуру можно «перекосить», и площадь изменится. "
+            "Меряй из угла в угол.</i>"
+        )
+
+
+@router.message(Area.quad_right)
+async def calc_quad_right(message: Message, state: FSMContext) -> None:
+    try:
+        a, b, c, d = meters(message.text or "", count=4)
+        await _answer(message, state, right_angled_quad(a, b, c, d))
+    except (ParseError, GeometryError) as e:
+        await message.answer(f"{e}\n\nПример: <code>2 1.8 2 1.8</code>")
 
 
 @router.message(Area.quad)
