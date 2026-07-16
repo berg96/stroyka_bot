@@ -4,6 +4,7 @@ import math
 import pytest
 from PIL import Image
 
+from tilebot.core.angled import angled_pieces
 from tilebot.core.estimate import PriceList, rough_material_cost, tile_paid_area_m2
 from tilebot.core.geometry import (
     GeometryError,
@@ -434,3 +435,50 @@ class TestTilePacks:
         assert line.per_pack == 9
         assert line.qty % 9 != 0, "нужен случай, где пачка не делится нацело"
         assert tile_paid_area_m2(line) > (line.area_m2 or 0)
+
+
+class TestAngled:
+    """Диагональ и ёлочка. Раньше обе считались как прямая укладка — цифры врали."""
+
+    def _wall(self, pattern):
+        return build_layout(Surface("стена", 2000, 2700), Tile(600, 300, joint_mm=2), pattern)
+
+    def test_angled_covers_the_wall_without_gaps_or_overlaps(self):
+        """Замощение: куски обязаны сойтись в площадь стены — без дыр и нахлёстов."""
+        for herringbone in (False, True):
+            pieces = angled_pieces(2000, 2700, 600, 300, 0.0, herringbone=herringbone)
+            total = sum(p.area_mm2 for p in pieces)
+            assert total == pytest.approx(2000 * 2700, rel=1e-3)
+
+    def test_angled_cuts_the_whole_perimeter(self):
+        """У 45° режется весь периметр — прямая укладка режет только два края."""
+        straight = self._wall(LayoutPattern.STRAIGHT)
+        for pattern in (LayoutPattern.DIAGONAL, LayoutPattern.HERRINGBONE):
+            angled = self._wall(pattern)
+            assert angled.cuts_count > straight.cuts_count * 2
+            assert angled.tiles_grid > straight.tiles_grid
+
+    def test_angled_tiles_are_polygons(self):
+        """Плитка под углом — не прямоугольник: у стены это треугольник или трапеция."""
+        lay = self._wall(LayoutPattern.DIAGONAL)
+        assert all(c.polygon for c in lay.cells)
+        assert any(len(c.polygon) == 3 for c in lay.cells), "нет ни одного треугольника"
+
+    def test_angled_never_claims_the_layout_is_even(self):
+        """«Раскладка ровная» для диагонали — враньё: там режется всё."""
+        for pattern in (LayoutPattern.DIAGONAL, LayoutPattern.HERRINGBONE):
+            advice = " ".join(self._wall(pattern).advice)
+            assert "ровная" not in advice
+            assert "резать" in advice
+
+    def test_each_pattern_gives_its_own_scheme(self):
+        """Диагональ и ёлочка выдавали схему байт в байт как «шов в шов»."""
+        schemes = {p: render_layout(self._wall(p)) for p in LayoutPattern}
+        assert len(set(schemes.values())) == len(LayoutPattern)
+
+    def test_herringbone_pairs_lie_and_stand(self):
+        """Ёлочка — пары «лёжа + стоя»: если все плитки одинаковы, это не ёлочка."""
+        cells = [c for c in self._wall(LayoutPattern.HERRINGBONE).cells if not c.is_cut]
+        wide = sum(1 for c in cells if c.w > c.h)
+        tall = sum(1 for c in cells if c.h > c.w)
+        assert wide > 0 and tall > 0

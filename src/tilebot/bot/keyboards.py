@@ -193,6 +193,9 @@ def surfaces_list(project_id: int, surfaces: list, action: str) -> InlineKeyboar
 
 def project_actions(project_id: int) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    # Схемы шлются сразу после расчёта, но объект живёт дальше: вернулся к нему
+    # завтра — и посмотреть раскладку было негде.
+    b.button(text="📐 Схемы раскладки", callback_data=f"schemes:{project_id}")
     b.button(text="🧾 Итог по объекту", callback_data=f"summary:{project_id}")
     b.button(text="💵 Смета заказчику", callback_data=f"estimate:{project_id}")
     b.button(text="💰 Деньги", callback_data=f"money:{project_id}")

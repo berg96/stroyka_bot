@@ -39,7 +39,7 @@ from tilebot.core.models import (
     Tile,
 )
 from tilebot.core.room import floor_dims, room_surfaces
-from tilebot.core.units import fmt_mm
+from tilebot.core.units import fmt_mm, plural
 from tilebot.render.scheme import render_layout
 from tilebot.storage import Storage, payload_to_surface, surface_to_payload
 
@@ -563,15 +563,6 @@ async def _show_result(
     )
 
 
-def _walls_word(n: int) -> str:
-    """«1 стена», «4 стены», «5 стен» — бот пишет мастеру, а не в лог."""
-    if n % 10 == 1 and n % 100 != 11:
-        return f"{n} стена"
-    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
-        return f"{n} стены"
-    return f"{n} стен"
-
-
 def _caption(layouts: list[Layout], materials: list[Materials], waste: float | None) -> str:
     """Сводка по посчитанным поверхностям: площадь, плитка, закупка одним списком."""
     tile = layouts[0].tile
@@ -585,7 +576,8 @@ def _caption(layouts: list[Layout], materials: list[Materials], waste: float | N
     else:
         walls = sum(1 for lay in layouts if lay.surface.kind is SurfaceKind.WALL)
         floor = " + пол" if any(lay.surface.kind is SurfaceKind.FLOOR for lay in layouts) else ""
-        head = f"<b>Комната целиком</b> — {_walls_word(walls)}{floor}, {area:.2f} м²"
+        counted = plural(walls, "стена", "стены", "стен")
+        head = f"<b>Комната целиком</b> — {counted}{floor}, {area:.2f} м²"
 
     # Как плитка легла — не то же самое, что мастер ввёл: ориентацию бот подбирает
     # сам. Показываем прямо и подсказываем, что это его решение, а не приговор.
@@ -702,6 +694,14 @@ async def _redraw(message: Message, user_id: int, storage: Storage, project_id: 
 
 
 # --- Фото плитки и цвет затирки ----------------------------------------------
+
+
+@router.callback_query(F.data.startswith("schemes:"))
+async def show_schemes(call: CallbackQuery, storage: Storage) -> None:
+    """Схемы раскладки по объекту — со всем, что мастер уже настроил."""
+    project_id = int(call.data.split(":")[1])
+    await call.answer()
+    await _redraw(call.message, call.from_user.id, storage, project_id)
 
 
 @router.callback_query(F.data.startswith("rotate:"))

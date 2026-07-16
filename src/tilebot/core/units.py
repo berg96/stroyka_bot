@@ -10,3 +10,12 @@ def fmt_mm(value: float) -> str:
     """Миллиметры так, как их пишет мастер: 2 → «2», 1.4 → «1,4»."""
     text = f"{value:.1f}".rstrip("0").rstrip(".")
     return text.replace(".", ",") or "0"
+
+
+def plural(n: int, one: str, few: str, many: str) -> str:
+    """«1 плитка», «32 плитки», «5 плиток» — бот пишет мастеру, а не в лог."""
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} {one}"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} {few}"
+    return f"{n} {many}"

@@ -129,6 +129,17 @@ def render_layout(
 
     # Рисуем ровно те плитки, которые посчитало ядро — включая пропуски под проёмами.
     for cell in layout.cells:
+        if cell.polygon:
+            # Плитка под 45°: рисуем её настоящую форму — у стены это треугольники
+            # и трапеции. Текстуру сюда не натянуть, поэтому берём цвет.
+            points = [(px(x), py(y)) for x, y in cell.polygon]
+            d.polygon(
+                points,
+                fill=CUT_FILL if cell.is_cut else TILE_FILL,
+                outline=CUT_EDGE if cell.is_cut else TILE_EDGE,
+            )
+            continue
+
         box = [
             px(cell.x) + gap,
             py(cell.y + cell.h) + gap,

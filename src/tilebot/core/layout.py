@@ -8,7 +8,9 @@
 import math
 from dataclasses import dataclass
 
+from tilebot.core.angled import Point, angled_pieces
 from tilebot.core.models import LayoutPattern, StartFrom, Surface, Tile
+from tilebot.core.units import plural
 
 # Подрезка уже этой доли плитки выглядит плохо и крошится при резке — классическое
 # правило мастеров «не меньше трети/половины плитки».
@@ -38,13 +40,18 @@ class Axis:
 
 @dataclass(frozen=True)
 class Cell:
-    """Одна плитка на поверхности. Координаты в мм от левого нижнего угла."""
+    """Одна плитка на поверхности. Координаты в мм от левого нижнего угла.
+
+    polygon непустой — плитка лежит под углом (диагональ, ёлочка) и прямоугольником
+    уже не описывается; x/y/w/h тогда её габаритная рамка.
+    """
 
     x: float
     y: float
     w: float
     h: float
     is_cut: bool
+    polygon: tuple[Point, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -242,6 +249,58 @@ def _advice(x: Axis, y: Axis, tile: Tile, surface: Surface, start: StartFrom) ->
     return out
 
 
+ANGLED = (LayoutPattern.DIAGONAL, LayoutPattern.HERRINGBONE)
+
+# Оси для раскладок под 45°: сетка повёрнута, и «подрезка слева/справа» смысла не
+# имеет — режется весь периметр. Пустая ось честнее выдуманных цифр.
+NO_AXIS = Axis(full=0, cut_start_mm=0.0, cut_end_mm=0.0, total=0)
+
+
+def _angled_cells(surface: Surface, tile: Tile, pattern: LayoutPattern) -> list[Cell]:
+    pieces = angled_pieces(
+        surface.width_mm,
+        surface.height_mm,
+        tile.width_mm,
+        tile.height_mm,
+        tile.joint_mm,
+        herringbone=pattern is LayoutPattern.HERRINGBONE,
+    )
+
+    cells: list[Cell] = []
+    for piece in pieces:
+        x0, y0, x1, y1 = piece.bbox
+        cell = Cell(
+            x=x0, y=y0, w=x1 - x0, h=y1 - y0, is_cut=piece.is_cut, polygon=piece.polygon
+        )
+        if _covered_by_opening(cell, surface):
+            continue
+        if not cell.is_cut and _clipped_by_opening(cell, surface):
+            cell = Cell(x=cell.x, y=cell.y, w=cell.w, h=cell.h, is_cut=True, polygon=cell.polygon)
+        cells.append(cell)
+    return cells
+
+
+def _angled_advice(cells: list[Cell], pattern: LayoutPattern) -> list[str]:
+    """Что важно знать про 45°: режется много, и это нормально."""
+    cuts = sum(1 for c in cells if c.is_cut)
+    total = len(cells) or 1
+    name = "Диагональ" if pattern is LayoutPattern.DIAGONAL else "Ёлочка"
+
+    out = [
+        f"{name}: резать придётся {plural(cuts, 'плитку', 'плитки', 'плиток')} из {total} — "
+        "весь периметр идёт треугольниками. Это не ошибка замера, так кладётся "
+        "любая раскладка под 45°.",
+        "Начинай от центра стены и веди в обе стороны — иначе рисунок уползёт, "
+        "и это будет видно.",
+    ]
+    if pattern is LayoutPattern.HERRINGBONE:
+        out.append(
+            "Ёлочку кладут парами: одна плитка лёжа, следующая стоя, торец в бок. "
+            "Держи угол — на длинной стене ошибка копится."
+        )
+    return out
+
+
 def build_layout(
     surface: Surface,
     tile: Tile,
@@ -249,6 +308,20 @@ def build_layout(
     start_from: StartFrom = StartFrom.EDGE,
 ) -> Layout:
     """Посчитать раскладку плитки на поверхности."""
+    if pattern in ANGLED:
+        # Под 45° сетка повёрнута: плитки становятся многоугольниками, а осей нет.
+        cells = _angled_cells(surface, tile, pattern)
+        return Layout(
+            surface=surface,
+            tile=tile,
+            pattern=pattern,
+            start_from=start_from,
+            x=NO_AXIS,
+            y=NO_AXIS,
+            cells=cells,
+            advice=_angled_advice(cells, pattern),
+        )
+
     x = _axis(surface.width_mm, tile.step_x_mm, tile.width_mm, start_from)
     # По вертикали всегда стартуем от низа целой плиткой: подрезку прячут внизу.
     y = _axis(surface.height_mm, tile.step_y_mm, tile.height_mm, StartFrom.EDGE)
