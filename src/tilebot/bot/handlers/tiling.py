@@ -5,13 +5,16 @@
 кругу и высоту, а параметры плитки — один раз на всю комнату.
 """
 
+import io
 import logging
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, InputMediaPhoto, Message
+from PIL import Image
+from PIL.Image import Image as PilImage
 
 from tilebot.bot import keyboards as kb
 from tilebot.bot.parse import (
@@ -55,6 +58,7 @@ class Tiling(StatesGroup):
     price = State()
     per_pack = State()
     opening_size = State()
+    tile_photo = State()
 
 
 @router.message(F.text == "🧱 Плитка")
@@ -517,21 +521,49 @@ def _lay(
     return max(candidates, key=lambda lay: min(lay.x.min_cut_mm, lay.y.min_cut_mm))
 
 
+async def _tile_texture(bot: Bot, file_id: str | None) -> PilImage | None:
+    """Фото плитки из Telegram — картинкой для схемы.
+
+    Если фото не отдалось (удалили, битый файл), схема рисуется как раньше:
+    показать серые квадратики лучше, чем не показать ничего.
+    """
+    if not file_id:
+        return None
+    try:
+        buf = io.BytesIO()
+        await bot.download(file_id, destination=buf)
+        buf.seek(0)
+        return Image.open(buf).convert("RGB")
+    except Exception:
+        logger.exception("не смог скачать фото плитки %s", file_id)
+        return None
+
+
 async def _show_result(
     message: Message,
     data: dict,
     layouts: list[Layout],
     materials: list[Materials],
     waste: float | None,
+    *,
+    tile_photo: PilImage | None = None,
+    grout: str | None = None,
 ) -> None:
     """Схемы всех поверхностей плюс один список закупки на них."""
     title = data.get("title", "")
     project_id = data["project_id"]
 
+    def draw(lay: Layout) -> bytes:
+        return render_layout(
+            lay,
+            title=f"{lay.surface.name} — {title}".strip(" —"),
+            tile_photo=tile_photo,
+            grout=grout,
+        )
+
     if len(layouts) == 1:
-        png = render_layout(layouts[0], title=f"{layouts[0].surface.name} — {title}".strip(" —"))
         await message.answer_photo(
-            BufferedInputFile(png, filename="scheme.png"),
+            BufferedInputFile(draw(layouts[0]), filename="scheme.png"),
             caption=_caption(layouts, materials, waste),
             reply_markup=kb.after_surface(project_id),
         )
@@ -539,12 +571,7 @@ async def _show_result(
 
     # Комната: схемы альбомом, чтобы не сыпать сообщениями, а закупка — одна.
     media = [
-        InputMediaPhoto(
-            media=BufferedInputFile(
-                render_layout(lay, title=f"{lay.surface.name} — {title}".strip(" —")),
-                filename=f"scheme_{i}.png",
-            )
-        )
+        InputMediaPhoto(media=BufferedInputFile(draw(lay), filename=f"scheme_{i}.png"))
         for i, lay in enumerate(layouts, start=1)
     ]
     for chunk in (media[i : i + 10] for i in range(0, len(media), 10)):
@@ -628,7 +655,7 @@ async def ask_repattern(call: CallbackQuery, storage: Storage) -> None:
 
 
 @router.callback_query(F.data.startswith("setpat:"))
-async def do_repattern(call: CallbackQuery, state: FSMContext, storage: Storage) -> None:
+async def do_repattern(call: CallbackQuery, storage: Storage) -> None:
     _, raw_id, raw_pattern = call.data.split(":")
     project_id = int(raw_id)
 
@@ -636,14 +663,25 @@ async def do_repattern(call: CallbackQuery, state: FSMContext, storage: Storage)
         await call.answer("Объект не найден.", show_alert=True)
         return
 
-    project = await storage.get_project(project_id, call.from_user.id)
     await call.answer("Пересчитал")
+    await _redraw(call.message, call.from_user.id, storage, project_id)
+
+
+async def _redraw(message: Message, user_id: int, storage: Storage, project_id: int) -> None:
+    """Пересчитать объект из сохранённых замеров и показать заново.
+
+    Сюда сходятся все «а покажи иначе»: другая раскладка, фото плитки, цвет
+    затирки. Замеры мастер вводил один раз — второй раз спрашивать их незачем.
+    """
+    project = await storage.get_project(project_id, user_id)
+    if project is None or not project.surfaces:
+        await message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
+        return
 
     saved_all = [payload_to_surface(row.dump()) for row in project.surfaces]
-    pattern = LayoutPattern(raw_pattern)
-    start_raw = saved_all[0].start_from.value
+    head = saved_all[0]
     walls_tile = _wall_tile(
-        [s.surface for s in saved_all], saved_all[0].tile, pattern, start_raw
+        [s.surface for s in saved_all], head.tile, head.pattern, head.start_from.value
     )
 
     layouts: list[Layout] = []
@@ -662,14 +700,89 @@ async def do_repattern(call: CallbackQuery, state: FSMContext, storage: Storage)
             calc_materials(layout, waterproofing=saved.waterproofing, waste=saved.waste)
         )
 
-    await state.update_data(project_id=project_id, title=project.title)
     await _show_result(
-        call.message,
+        message,
         {"project_id": project_id, "title": project.title},
         layouts,
         materials,
-        None,
+        head.waste,
+        tile_photo=await _tile_texture(message.bot, head.tile_photo_id),
+        grout=head.grout,
     )
+
+
+# --- Фото плитки и цвет затирки ----------------------------------------------
+
+
+@router.callback_query(F.data.startswith("tilephoto:"))
+async def ask_tile_photo(call: CallbackQuery, state: FSMContext) -> None:
+    project_id = int(call.data.split(":")[1])
+    await state.update_data(project_id=project_id)
+    await state.set_state(Tiling.tile_photo)
+    await call.answer()
+    await call.message.answer(
+        "Пришли <b>фото плитки</b> — и на схеме будет она, а не белые квадраты.\n\n"
+        "<i>Сфоткай саму плитку прямо в магазине или пачку дома. Лучше одну плитку "
+        "целиком, ровно, без бликов — так рисунок ляжет точнее.</i>"
+    )
+
+
+@router.message(Tiling.tile_photo, F.photo)
+async def got_tile_photo(message: Message, state: FSMContext, storage: Storage) -> None:
+    data = await state.get_data()
+    project_id = data.get("project_id")
+    if project_id is None:
+        await state.set_state(None)
+        await message.answer("Не понял, к какому объекту. Открой его заново.")
+        return
+
+    # Берём самый крупный размер — Telegram отдаёт лесенку превью.
+    file_id = message.photo[-1].file_id
+    if not await storage.update_project_surfaces(
+        project_id, message.from_user.id, tile_photo_id=file_id
+    ):
+        await state.set_state(None)
+        await message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
+        return
+
+    await state.set_state(None)
+    await message.answer("Взял твою плитку. Перерисовываю…")
+    await _redraw(message, message.from_user.id, storage, project_id)
+
+
+@router.message(Tiling.tile_photo, ~F.photo)
+async def not_a_tile_photo(message: Message) -> None:
+    await message.answer("Жду фото плитки. Или жми любую кнопку меню.")
+
+
+@router.callback_query(F.data.startswith("grout:"))
+async def ask_grout(call: CallbackQuery, storage: Storage) -> None:
+    project_id = int(call.data.split(":")[1])
+    project = await storage.get_project(project_id, call.from_user.id)
+    if project is None or not project.surfaces:
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    current = payload_to_surface(project.surfaces[0].dump()).grout
+    await call.answer()
+    await call.message.answer(
+        "Какая затирка?\n\n<i>Тёмная на светлой плитке подчёркивает шов, "
+        "светлая прячет. На схеме сразу видно, как выйдет.</i>",
+        reply_markup=kb.grout_colors(project_id, current),
+    )
+
+
+@router.callback_query(F.data.startswith("setgrout:"))
+async def set_grout(call: CallbackQuery, storage: Storage) -> None:
+    _, raw_id, color = call.data.split(":")
+    project_id = int(raw_id)
+
+    if not await storage.update_project_surfaces(project_id, call.from_user.id, grout=color):
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    await call.answer("Перерисовываю")
+    await _redraw(call.message, call.from_user.id, storage, project_id)
 
 
 @router.callback_query(F.data.startswith("opening:"))

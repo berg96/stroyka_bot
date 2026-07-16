@@ -6,6 +6,7 @@ FSM-переход, callback_data, не та клавиатура. Гонять 
 апдейтами напрямую — те же хендлеры, тот же роутинг, только без сети.
 """
 
+import io
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import Any
@@ -14,9 +15,10 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
 from aiogram.methods import TelegramMethod
-from aiogram.types import Chat, InlineKeyboardMarkup, Update
+from aiogram.types import Chat, File, InlineKeyboardMarkup, PhotoSize, Update
 from aiogram.types import Message as TgMessage
 from aiogram.types import User as TgUser
+from PIL import Image, ImageDraw
 
 from tilebot.bot.handlers import area, tiling
 from tilebot.storage import Storage
@@ -26,6 +28,17 @@ CHAT = Chat(id=SASHA, type="private")
 USER = TgUser(id=SASHA, is_bot=False, first_name="Саня")
 
 
+def sample_tile_photo() -> bytes:
+    """«Фото плитки», которое мастер прислал из магазина."""
+    image = Image.new("RGB", (600, 300), (58, 62, 68))
+    draw = ImageDraw.Draw(image)
+    for x in range(0, 600, 40):
+        draw.line([(x, 0), (x - 100, 300)], fill=(96, 102, 110), width=3)
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 class FakeSession(BaseSession):
     """Ничего не отправляет — просто записывает, что бот хотел послать."""
 
@@ -33,17 +46,22 @@ class FakeSession(BaseSession):
         super().__init__()
         self.sent: list[TelegramMethod[Any]] = []
         self._counter = 1000
+        self.file_bytes = sample_tile_photo()
 
     async def close(self) -> None:
         pass
 
     async def stream_content(self, *args: Any, **kwargs: Any) -> AsyncGenerator[bytes, None]:
-        yield b""
+        # Отдаём картинку: иначе фото плитки не проверить — рендер молча
+        # откатится на серые квадратики, и тест этого не заметит.
+        yield self.file_bytes
 
     async def make_request(self, bot: Bot, method: TelegramMethod[Any], timeout: int = 60) -> Any:
         self.sent.append(method)
         name = type(method).__name__
 
+        if name == "GetFile":
+            return File(file_id=method.file_id, file_unique_id="u", file_path="tile.jpg")
         if name == "SendMediaGroup":
             return [self._message() for _ in method.media]
         if name.startswith("Send") or name.startswith("Edit"):
@@ -89,6 +107,21 @@ class BotHarness:
             chat=CHAT,
             from_user=USER,
             text=text,
+        )
+        await self.dp.feed_update(
+            self.bot, Update(update_id=self._next_update(), message=message)
+        )
+
+    async def send_photo(self) -> None:
+        """Мастер прислал фото плитки."""
+        self._message_id += 1
+        photo = PhotoSize(file_id="tilephoto1", file_unique_id="u1", width=600, height=300)
+        message = TgMessage(
+            message_id=self._message_id,
+            date=datetime(2026, 7, 16, 12, 0),
+            chat=CHAT,
+            from_user=USER,
+            photo=[photo],
         )
         await self.dp.feed_update(
             self.bot, Update(update_id=self._next_update(), message=message)
@@ -168,6 +201,12 @@ class BotHarness:
             elif name == "SendMediaGroup":
                 count += len(method.media)
         return count
+
+    def downloaded_files(self) -> list[str]:
+        """Какие файлы бот забирал из Telegram — доказательство, что фото пошло в схему."""
+        return [
+            m.file_id for m in self.session.sent if type(m).__name__ == "GetFile"
+        ]
 
     def forget(self) -> None:
         """Забыть переписку — чтобы проверять только то, что после этой точки."""

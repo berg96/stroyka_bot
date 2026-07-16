@@ -1,6 +1,8 @@
+import io
 import math
 
 import pytest
+from PIL import Image
 
 from tilebot.core.geometry import (
     GeometryError,
@@ -24,6 +26,7 @@ from tilebot.core.materials import (
 from tilebot.core.models import LayoutPattern, Opening, StartFrom, Surface, SurfaceKind, Tile
 from tilebot.core.room import floor_dims, room_surfaces
 from tilebot.core.units import fmt_mm
+from tilebot.render.scheme import _texture, grout_rgb, render_layout
 
 
 class TestGeometry:
@@ -332,3 +335,59 @@ class TestPurchaseList:
         layouts = self._room(Tile(600, 300))
         sizes = {(lay.tile.width_mm, lay.tile.height_mm) for lay in layouts}
         assert len(sizes) == 1
+
+
+class TestScheme:
+    """Схема с фото плитки — «как будет выглядеть», а не только «сколько штук»."""
+
+    def _wall(self, joint=1.4):
+        return build_layout(Surface("Стена 1", 2000, 2700), Tile(600, 300, joint_mm=joint))
+
+    def test_photo_changes_the_scheme(self):
+        photo = Image.new("RGB", (600, 300), (58, 62, 68))
+        plain = render_layout(self._wall())
+        with_photo = render_layout(self._wall(), tile_photo=photo, grout="white")
+        assert plain != with_photo
+
+    def test_grout_colour_changes_the_scheme(self):
+        """Иначе выбор цвета затирки — кнопка, которая ничего не делает."""
+        photo = Image.new("RGB", (600, 300), (58, 62, 68))
+        white = render_layout(self._wall(), tile_photo=photo, grout="white")
+        black = render_layout(self._wall(), tile_photo=photo, grout="black")
+        assert white != black
+
+    def test_grout_is_actually_visible_on_a_thin_joint(self):
+        """Шов 1,4 мм на схеме тоньше пикселя — цвет затирки было не разглядеть.
+
+        Считаем не «сколько пикселей затирки всего» (их и от округлений набежит),
+        а толщину каждого шва: полоска в один пиксель — это не видно.
+        """
+        photo = Image.new("RGB", (600, 300), (58, 62, 68))  # тёмная плитка
+        png = render_layout(self._wall(joint=1.4), tile_photo=photo, grout="white")
+        img = Image.open(io.BytesIO(png))
+        white = grout_rgb("white")
+
+        # Столбец через середину стены пересекает горизонтальные швы.
+        column = [img.getpixel((img.width // 2, y))[:3] for y in range(img.height)]
+        runs, current = [], 0
+        for pixel in column:
+            if pixel == white:
+                current += 1
+            elif current:
+                runs.append(current)
+                current = 0
+
+        assert runs, "затирки на схеме не видно вообще"
+        assert min(runs) >= 2, f"швы толщиной {min(runs)} px — мастер их не разглядит"
+
+    def test_grout_falls_back_to_default(self):
+        assert grout_rgb(None) == grout_rgb("grey")
+        assert grout_rgb("нет такого") == grout_rgb("grey")
+
+    def test_portrait_photo_is_turned_for_a_landscape_tile(self):
+        """Мастер снимает плитку как придётся — кадр не должен растянуть рисунок."""
+        portrait = Image.new("RGB", (300, 600))
+        assert _texture(portrait, 600, 300).size == (600, 300)
+
+    def test_photo_is_not_required(self):
+        assert len(render_layout(self._wall(), grout="black")) > 0

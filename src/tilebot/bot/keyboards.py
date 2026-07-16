@@ -9,6 +9,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from tilebot.core.models import LayoutPattern, StartFrom
+from tilebot.render.scheme import GROUT_COLORS
 
 MAIN_MENU = ReplyKeyboardMarkup(
     keyboard=[
@@ -138,11 +139,24 @@ def after_surface(project_id: int) -> InlineKeyboardMarkup:
     """Что делать, когда поверхность посчитана."""
     b = InlineKeyboardBuilder()
     b.button(text="🔀 Сменить раскладку", callback_data=f"repat:{project_id}")
+    b.button(text="🖼 Фото плитки", callback_data=f"tilephoto:{project_id}")
+    b.button(text="🎨 Цвет затирки", callback_data=f"grout:{project_id}")
     b.button(text="🚪 Учесть проём", callback_data=f"opening:{project_id}")
     b.button(text="➕ Ещё стена / пол", callback_data=f"add_surface:{project_id}")
     b.button(text="🧾 Итог по объекту", callback_data=f"summary:{project_id}")
     b.button(text="💵 Смета заказчику", callback_data=f"estimate:{project_id}")
-    b.adjust(1)
+    b.adjust(1, 2, 1)
+    return b.as_markup()
+
+
+def grout_colors(project_id: int, current: str | None) -> InlineKeyboardMarkup:
+    """Затирка: мастер выбирает мешок в магазине, а не hex."""
+    b = InlineKeyboardBuilder()
+    for key, (title, _rgb) in GROUT_COLORS.items():
+        mark = " ✓" if key == current else ""
+        b.button(text=f"{title}{mark}", callback_data=f"setgrout:{project_id}:{key}")
+    b.button(text="⬅️ Назад", callback_data=f"open:{project_id}")
+    b.adjust(2, 2, 1, 1)
     return b.as_markup()
 
 

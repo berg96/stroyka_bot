@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -148,6 +149,8 @@ def surface_to_payload(
     *,
     waterproofing: bool,
     waste: float | None = None,
+    tile_photo_id: str | None = None,
+    grout: str | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -179,6 +182,10 @@ def surface_to_payload(
             "start_from": start_from.value,
             "waterproofing": waterproofing,
             "waste": waste,
+            # Фото самой плитки (file_id) и цвет затирки — чтобы схема показывала
+            # не серые квадратики, а то, что мастер реально купил.
+            "tile_photo_id": tile_photo_id,
+            "grout": grout,
         },
         ensure_ascii=False,
     )
@@ -194,6 +201,8 @@ class SavedSurface:
     start_from: StartFrom
     waterproofing: bool
     waste: float | None = None  # None — берём норму под раскладку
+    tile_photo_id: str | None = None
+    grout: str | None = None
 
 
 def payload_to_surface(data: dict) -> SavedSurface:
@@ -213,6 +222,8 @@ def payload_to_surface(data: dict) -> SavedSurface:
         start_from=StartFrom(data["start_from"]),
         waterproofing=bool(data.get("waterproofing", False)),
         waste=data.get("waste"),
+        tile_photo_id=data.get("tile_photo_id"),
+        grout=data.get("grout"),
     )
 
 
@@ -271,12 +282,11 @@ class Storage:
             await s.commit()
         return True
 
-    async def set_project_pattern(self, project_id: int, tg_id: int, pattern: str) -> bool:
-        """Переложить весь объект другой раскладкой.
+    async def update_project_surfaces(self, project_id: int, tg_id: int, **changes: Any) -> bool:
+        """Поправить поле во всех поверхностях объекта разом.
 
-        Мастер смотрит «а если вразбежку?» — стены объекта кладут одинаково, так
-        что раскладка меняется у всех поверхностей разом. Запас сбрасываем в None:
-        под диагональ нужен свой, а прежний выбор был сделан под другую раскладку.
+        Плитка, раскладка и затирка — свойства объекта, а не отдельной стены: их
+        меняют для всей комнаты сразу.
         """
         if not await self.owns(project_id, tg_id):
             return False
@@ -284,11 +294,20 @@ class Storage:
             result = await s.execute(select(SurfaceRow).where(SurfaceRow.project_id == project_id))
             for row in result.scalars():
                 data = json.loads(row.payload_json)
-                data["pattern"] = pattern
-                data["waste"] = None
+                data.update(changes)
                 row.payload_json = json.dumps(data, ensure_ascii=False)
             await s.commit()
         return True
+
+    async def set_project_pattern(self, project_id: int, tg_id: int, pattern: str) -> bool:
+        """Переложить весь объект другой раскладкой.
+
+        Запас сбрасываем в None: под диагональ нужен свой, а прежний выбор был
+        сделан под другую раскладку.
+        """
+        return await self.update_project_surfaces(
+            project_id, tg_id, pattern=pattern, waste=None
+        )
 
     async def get_surface(self, surface_id: int, tg_id: int) -> SurfaceRow | None:
         """Поверхность по id — только внутри объекта этого мастера."""

@@ -2,6 +2,11 @@
 
 Мастеру нужно увидеть стену: где целые плитки, где подрезка и какой она ширины.
 Рисуем в чистом виде — плитки, размеры по краям, подрезка выделена.
+
+Если мастер прислал фото своей плитки, схема перестаёт быть чертежом «в серых
+квадратиках»: плитка рисуется настоящая, а швы — того цвета затирки, который он
+собирается купить. Это уже не «сколько штук», а «как будет выглядеть» — то, что
+заказчику показывают до начала работ.
 """
 
 import io
@@ -27,6 +32,25 @@ MARGIN = 70
 MAX_CANVAS = 1400
 MIN_CANVAS = 520
 
+# Шов 1,4 мм на схеме — меньше пикселя, и цвет затирки не разглядеть. На стене он
+# виден, потому что стена не 20 см шириной. Поэтому шов рисуем не тоньше этого:
+# плитка теряет пару пикселей из трёхсот, зато мастер видит, что покупает.
+MIN_JOINT_PX = 3.0
+
+# Затирка. Мастер выбирает не hex, а мешок в магазине — поэтому ходовые цвета.
+GROUT_COLORS: dict[str, tuple[str, tuple[int, int, int]]] = {
+    "white": ("Белая", (242, 242, 240)),
+    "grey": ("Серая", (156, 160, 162)),
+    "beige": ("Бежевая", (214, 199, 174)),
+    "graphite": ("Графит", (86, 90, 94)),
+    "black": ("Чёрная", (38, 40, 42)),
+}
+DEFAULT_GROUT = "grey"
+
+
+def grout_rgb(name: str | None) -> tuple[int, int, int]:
+    return GROUT_COLORS.get(name or DEFAULT_GROUT, GROUT_COLORS[DEFAULT_GROUT])[1]
+
 
 def _font(size: int) -> ImageFont.FreeTypeFont:
     for path in (
@@ -40,8 +64,28 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default(size)
 
 
-def render_layout(layout: Layout, title: str | None = None) -> bytes:
-    """Отрисовать раскладку в PNG."""
+def _texture(photo: Image.Image, tile_w_px: int, tile_h_px: int) -> Image.Image:
+    """Фото плитки под размер плитки на схеме.
+
+    Мастер снимает плитку как придётся — лёжа или стоя. Если кадр развёрнут не так,
+    как плитка лежит на стене, поворачиваем, иначе рисунок растянет поперёк.
+    """
+    if (photo.width > photo.height) != (tile_w_px > tile_h_px):
+        photo = photo.rotate(90, expand=True)
+    return photo.resize((max(1, tile_w_px), max(1, tile_h_px)), Image.LANCZOS)
+
+
+def render_layout(
+    layout: Layout,
+    title: str | None = None,
+    *,
+    tile_photo: Image.Image | None = None,
+    grout: str | None = None,
+) -> bytes:
+    """Отрисовать раскладку в PNG.
+
+    tile_photo — фото настоящей плитки; grout — ключ цвета затирки из GROUT_COLORS.
+    """
     surface = layout.surface
     tile = layout.tile
     sw, sh = surface.width_mm, surface.height_mm
@@ -69,10 +113,45 @@ def render_layout(layout: Layout, title: str | None = None) -> bytes:
     def py(y_mm: float) -> float:
         return oy - y_mm * scale
 
+    # Стена целиком — цветом затирки: между плитками остаётся шов, и он же виден
+    # по краям подрезки. Без фото это просто фон и рисовать его незачем.
+    if tile_photo is not None or grout:
+        d.rectangle([px(0), py(sh), px(sw), py(0)], fill=grout_rgb(grout))
+
+    # Насколько ужать плитку, чтобы шов стало видно.
+    gap = max(0.0, MIN_JOINT_PX - tile.joint_mm * scale) / 2 if (tile_photo or grout) else 0.0
+
+    texture = None
+    if tile_photo is not None:
+        texture = _texture(
+            tile_photo, round(tile.width_mm * scale), round(tile.height_mm * scale)
+        )
+
     # Рисуем ровно те плитки, которые посчитало ядро — включая пропуски под проёмами.
     for cell in layout.cells:
+        box = [
+            px(cell.x) + gap,
+            py(cell.y + cell.h) + gap,
+            px(cell.x + cell.w) - gap,
+            py(cell.y) - gap,
+        ]
+
+        if texture is not None:
+            # Подрезанная плитка — это кусок целой: обрезаем текстуру, а не жмём её.
+            w_px = max(1, round(box[2] - box[0]))
+            h_px = max(1, round(box[3] - box[1]))
+            patch = texture.crop((0, 0, min(w_px, texture.width), min(h_px, texture.height)))
+            if patch.size != (w_px, h_px):
+                patch = patch.resize((w_px, h_px), Image.LANCZOS)
+            img.paste(patch, (round(box[0]), round(box[1])))
+            # Подрезку всё равно надо видеть, но тонко: тут смотрят на плитку, а не
+            # на чертёж — жирная рамка забивает вид.
+            if cell.is_cut:
+                d.rectangle(box, outline=CUT_EDGE, width=1)
+            continue
+
         d.rectangle(
-            [px(cell.x), py(cell.y + cell.h), px(cell.x + cell.w), py(cell.y)],
+            box,
             fill=CUT_FILL if cell.is_cut else TILE_FILL,
             outline=CUT_EDGE if cell.is_cut else TILE_EDGE,
             width=2,
@@ -114,6 +193,8 @@ def render_layout(layout: Layout, title: str | None = None) -> bytes:
         f"плитка {tile.width_mm:.0f}×{tile.height_mm:.0f} мм · шов {fmt_mm(tile.joint_mm)} мм · "
         f"{layout.tiles_grid} шт, из них резаных {layout.cuts_count}"
     )
+    if grout:
+        sub += f" · затирка {GROUT_COLORS[grout][0].lower()}"
     d.text((MARGIN, 46), sub, fill=MUTED, font=f_small, anchor="lm")
 
     # Подписи ширины подрезки — то, ради чего схема и рисуется.

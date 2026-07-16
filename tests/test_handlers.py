@@ -198,3 +198,67 @@ async def _room_flow(app) -> None:
     await app.click("Как лучше")
     await app.click("7%")
     await app.click("Да, мокрая зона")
+
+
+class TestTilePhoto:
+    """Артём: после покупки плитки прислать фото — и на схеме будет она."""
+
+    async def test_photo_is_asked_and_redraws_the_room(self, app):
+        await _room_flow(app)
+        await app.click("Фото плитки")
+        assert app.said("Пришли <b>фото плитки</b>")
+
+        app.forget()
+        await app.send_photo()
+
+        assert app.said("Взял твою плитку")
+        # Замеры мастер вводил один раз — комнату перерисовываем, а не спрашиваем заново.
+        assert not app.said("Обмерь комнату")
+        assert app.photos_sent() == 5
+        assert app.said("Купить:")
+        # Фото реально ушло в схему, а не просто осело в базе.
+        assert app.downloaded_files() == ["tilephoto1"]
+
+    async def test_photo_survives_a_pattern_switch(self, app):
+        """Сменил раскладку — плитка должна остаться его, а не сброситься в серую."""
+        await _room_flow(app)
+        await app.click("Фото плитки")
+        await app.send_photo()
+
+        await app.click("Сменить раскладку")
+        herringbone = app.find_button("Ёлочка")
+
+        app.forget()
+        await app.click_data(herringbone)
+
+        assert app.photos_sent() == 5
+        assert app.said("Купить:")
+        assert app.downloaded_files() == ["tilephoto1"]
+
+    async def test_non_photo_is_refused(self, app):
+        await _room_flow(app)
+        await app.click("Фото плитки")
+        await app.send("60 30")
+        assert app.said("Жду фото плитки")
+
+
+class TestGrout:
+    async def test_grout_colour_can_be_picked_and_redraws(self, app):
+        await _room_flow(app)
+        await app.click("Цвет затирки")
+        assert app.find_button("Белая") is not None
+        assert app.find_button("Графит") is not None
+        black = app.find_button("Чёрная")
+
+        app.forget()
+        await app.click_data(black)
+
+        assert app.photos_sent() == 5
+        assert app.said("Купить:")
+
+    async def test_picked_grout_is_marked(self, app):
+        await _room_flow(app)
+        await app.click("Цвет затирки")
+        await app.click("Бежевая")
+        await app.click("Цвет затирки")
+        assert app.find_button("Бежевая ✓") is not None
