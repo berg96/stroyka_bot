@@ -28,7 +28,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, selectinload
 
 from tilebot.core.estimate import PriceList
-from tilebot.core.models import LayoutPattern, Opening, StartFrom, Surface, SurfaceKind, Tile
+from tilebot.core.models import (
+    GroutKind,
+    LayoutPattern,
+    Opening,
+    StartFrom,
+    Surface,
+    SurfaceKind,
+    Tile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +160,7 @@ def surface_to_payload(
     tile_photo_id: str | None = None,
     grout: str | None = None,
     tile_locked: bool = False,
+    grout_kind: str = GroutKind.CEMENT.value,
 ) -> str:
     return json.dumps(
         {
@@ -187,6 +196,7 @@ def surface_to_payload(
             # не серые квадратики, а то, что мастер реально купил.
             "tile_photo_id": tile_photo_id,
             "grout": grout,
+            "grout_kind": grout_kind,
             # Мастер повернул плитку сам — больше её не вертим, как бы ни хотелось
             # ради подрезки: как она лежит, решает он.
             "tile_locked": tile_locked,
@@ -208,6 +218,7 @@ class SavedSurface:
     tile_photo_id: str | None = None
     grout: str | None = None
     tile_locked: bool = False
+    grout_kind: GroutKind = GroutKind.CEMENT
 
 
 def payload_to_surface(data: dict) -> SavedSurface:
@@ -230,6 +241,7 @@ def payload_to_surface(data: dict) -> SavedSurface:
         tile_photo_id=data.get("tile_photo_id"),
         grout=data.get("grout"),
         tile_locked=bool(data.get("tile_locked", False)),
+        grout_kind=GroutKind(data.get("grout_kind", GroutKind.CEMENT.value)),
     )
 
 
@@ -343,6 +355,31 @@ class Storage:
                 tile = data["tile"]
                 tile["width_mm"], tile["height_mm"] = tile["height_mm"], tile["width_mm"]
                 data["tile_locked"] = True
+                row.payload_json = json.dumps(data, ensure_ascii=False)
+            await s.commit()
+        return True
+
+    async def set_tile_size(
+        self, project_id: int, tg_id: int, width_mm: float, height_mm: float, *, kind: str
+    ) -> bool:
+        """Сменить размер плитки на стенах или на полу и пересчитать по ним.
+
+        Мастеру нужно быстро прикинуть «а если взять другую плитку» — не пересоздавая
+        объект и не вводя заново все замеры.
+        """
+        if not await self.owns(project_id, tg_id):
+            return False
+        async with self.session() as s:
+            result = await s.execute(select(SurfaceRow).where(SurfaceRow.project_id == project_id))
+            for row in result.scalars():
+                data = json.loads(row.payload_json)
+                if data["surface"]["kind"] != kind:
+                    continue
+                data["tile"]["width_mm"] = width_mm
+                data["tile"]["height_mm"] = height_mm
+                # Размер сменили — прежний ручной поворот к новой плитке отношения
+                # не имеет, пусть бот снова подберёт ориентацию.
+                data["tile_locked"] = False
                 row.payload_json = json.dumps(data, ensure_ascii=False)
             await s.commit()
         return True

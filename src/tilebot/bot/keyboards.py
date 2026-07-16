@@ -8,7 +8,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from tilebot.core.models import LayoutPattern, StartFrom
+from tilebot.core.models import GroutKind, LayoutPattern, StartFrom
 from tilebot.render.scheme import GROUT_COLORS
 
 MAIN_MENU = ReplyKeyboardMarkup(
@@ -134,6 +134,12 @@ SKIP = InlineKeyboardMarkup(
     inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="skip")]]
 )
 
+SAME_TILE = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="Такая же, как на стены", callback_data="same_tile")]
+    ]
+)
+
 
 def after_surface(project_id: int) -> InlineKeyboardMarkup:
     """Что делать, когда поверхность посчитана."""
@@ -141,8 +147,10 @@ def after_surface(project_id: int) -> InlineKeyboardMarkup:
     b.button(text="🔀 Сменить раскладку", callback_data=f"repat:{project_id}")
     b.button(text="↔️ Начало ряда", callback_data=f"restart:{project_id}")
     b.button(text="🔄 Повернуть плитку", callback_data=f"rotate:{project_id}")
+    b.button(text="📏 Размер плитки", callback_data=f"resize:{project_id}")
     b.button(text="🖼 Фото плитки", callback_data=f"tilephoto:{project_id}")
     b.button(text="🎨 Цвет затирки", callback_data=f"grout:{project_id}")
+    b.button(text="🧴 Вид затирки", callback_data=f"groutkind:{project_id}")
     b.button(text="🚪 Учесть проём", callback_data=f"opening:{project_id}")
     b.button(text="➕ Ещё стена / пол", callback_data=f"add_surface:{project_id}")
     b.button(text="🧾 Итог по объекту", callback_data=f"summary:{project_id}")
@@ -151,6 +159,27 @@ def after_surface(project_id: int) -> InlineKeyboardMarkup:
     # мастер закупался сам.
     b.button(text="📄 Акт выполненных работ", callback_data=f"act:{project_id}")
     b.adjust(2, 2, 1)
+    return b.as_markup()
+
+
+def grout_kinds(project_id: int, current: GroutKind) -> InlineKeyboardMarkup:
+    """Цементная или эпоксидная: разный расход и разная цена работы."""
+    b = InlineKeyboardBuilder()
+    for kind, title in ((GroutKind.CEMENT, "Цементная"), (GroutKind.EPOXY, "Эпоксидная")):
+        mark = " ✓" if kind is current else ""
+        b.button(text=f"{title}{mark}", callback_data=f"setgroutkind:{project_id}:{kind.value}")
+    b.button(text="⬅️ Назад", callback_data=f"open:{project_id}")
+    b.adjust(2, 1)
+    return b.as_markup()
+
+
+def tile_target(project_id: int) -> InlineKeyboardMarkup:
+    """Где менять плитку: на стенах или на полу — они бывают разные."""
+    b = InlineKeyboardBuilder()
+    b.button(text="Стены", callback_data=f"resizeat:{project_id}:wall")
+    b.button(text="Пол", callback_data=f"resizeat:{project_id}:floor")
+    b.button(text="⬅️ Назад", callback_data=f"open:{project_id}")
+    b.adjust(2, 1)
     return b.as_markup()
 
 
@@ -247,13 +276,16 @@ def price_fields() -> InlineKeyboardMarkup:
         ("floor_tiling", "Плитка на пол, ₽/м²"),
         ("waterproofing", "Гидроизоляция, ₽/м²"),
         ("priming", "Грунтовка, ₽/м²"),
-        ("grouting", "Затирка швов, ₽/м²"),
+        ("grouting", "Затирка цементной, ₽/м²"),
+        ("grouting_epoxy", "Затирка эпоксидной, ₽/м²"),
+        ("cutting", "Подрезка, ₽/шт"),
         ("demolition", "Демонтаж, ₽/м²"),
         ("min_order", "Минимальный заказ, ₽"),
         # Справочные цены материалов — правятся так же, как расценки на работу.
         ("mat_tile_m2", "🧱 Плитка, ₽/м²"),
         ("mat_glue_kg", "🧱 Клей, ₽/кг"),
-        ("mat_grout_kg", "🧱 Затирка, ₽/кг"),
+        ("mat_grout_kg", "🧱 Затирка цем., ₽/кг"),
+        ("mat_grout_epoxy_kg", "🧱 Затирка эпокс., ₽/кг"),
         ("mat_primer_l", "🧱 Грунтовка, ₽/л"),
         ("mat_waterproof_kg", "🧱 Гидроизоляция, ₽/кг"),
         ("mat_clip_pcs", "🧱 СВП-зажим, ₽/шт"),

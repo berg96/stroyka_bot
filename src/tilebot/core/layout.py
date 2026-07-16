@@ -10,7 +10,6 @@ from dataclasses import dataclass
 
 from tilebot.core.angled import Point, angled_pieces
 from tilebot.core.models import LayoutPattern, StartFrom, Surface, Tile
-from tilebot.core.units import plural
 
 # Подрезка уже этой доли плитки выглядит плохо и крошится при резке — классическое
 # правило мастеров «не меньше трети/половины плитки».
@@ -139,6 +138,29 @@ def _spans(axis: Axis, tile_mm: float, joint_mm: float) -> list[tuple[float, flo
     return out
 
 
+def _staggered_spans(
+    surface_w: float, tile_mm: float, joint_mm: float, shift: float
+) -> list[tuple[float, float, bool]]:
+    """Смещённый ряд кирпичной кладки: обрезок, дальше целые до конца стены.
+
+    Сдвинутому ряду подрезка соседнего ряда не наследуется — у него своя, от
+    смещения. Раньше он брал спаны оси вместе с её краевой подрезкой, и слева
+    оказывались два обрезка подряд там, где должна лежать целая плитка.
+    """
+    out: list[tuple[float, float, bool]] = []
+    first = shift - joint_mm
+    if first > 1e-6:
+        out.append((0.0, first, True))
+
+    pos = shift
+    while pos < surface_w - 1e-6:
+        width = min(tile_mm, surface_w - pos)
+        if width > 1e-6:
+            out.append((pos, width, width < tile_mm - 1e-6))
+        pos += tile_mm + joint_mm
+    return out
+
+
 def _covered_by_opening(cell: Cell, surface: Surface) -> bool:
     """Плитка целиком внутри проёма — её просто не кладут.
 
@@ -183,13 +205,12 @@ def build_cells(
         shift = (tile.width_mm + tile.joint_mm) / 2 if staggered else 0.0
 
         row_cells: list[Cell] = []
-        if shift > 0:
-            row_cells.append(
-                Cell(x=0.0, y=cy, w=max(0.0, shift - tile.joint_mm), h=ch, is_cut=True)
-            )
+        spans = (
+            _staggered_spans(sw, tile.width_mm, tile.joint_mm, shift) if staggered else cols
+        )
 
-        for cx, cw, cut_x in cols:
-            gx = cx + shift
+        for cx, cw, cut_x in spans:
+            gx = cx
             if gx >= sw - 1e-6:
                 continue  # ряд кончился, плитке места нет
             gw = cw
@@ -281,15 +302,19 @@ def _angled_cells(surface: Surface, tile: Tile, pattern: LayoutPattern) -> list[
 
 
 def _angled_advice(cells: list[Cell], pattern: LayoutPattern) -> list[str]:
-    """Что важно знать про 45°: режется много, и это нормально."""
-    cuts = sum(1 for c in cells if c.is_cut)
-    total = len(cells) or 1
+    """Что важно знать про 45°: режется много, и это нормально.
+
+    Без цифр: сколько резать, уже написано строкой выше («Класть: N шт, резаных M»),
+    а в комнате у каждой стены они свои — и один и тот же совет с разными числами
+    сыпался мастеру по четыре раза подряд.
+    """
     name = "Диагональ" if pattern is LayoutPattern.DIAGONAL else "Ёлочка"
 
     out = [
-        f"{name}: резать придётся {plural(cuts, 'плитку', 'плитки', 'плиток')} из {total} — "
-        "весь периметр идёт треугольниками. Это не ошибка замера, так кладётся "
-        "любая раскладка под 45°.",
+        f"{name}: режется весь периметр — плитки у стен уходят треугольниками. "
+        "Это не ошибка замера, так кладётся любая раскладка под 45°.",
+        "Каждую крайнюю плитку режут по месту: прикладываешь и чертишь. "
+        "Заранее размеры не считаю — у 45° они все разные.",
         "Начинай от центра стены и веди в обе стороны — иначе рисунок уползёт, "
         "и это будет видно.",
     ]

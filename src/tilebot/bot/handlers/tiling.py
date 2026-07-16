@@ -59,6 +59,9 @@ class Tiling(StatesGroup):
     per_pack = State()
     opening_size = State()
     tile_photo = State()
+    floor_tile_size = State()
+    floor_per_pack = State()
+    resize = State()
 
 
 @router.message(F.text == "🧱 Плитка")
@@ -254,12 +257,13 @@ async def got_tile_size(message: Message, state: FSMContext) -> None:
         await message.answer("Размер плитки должен быть больше нуля: <code>60 30</code>")
         return
 
-    # Плитку меряют в сантиметрах («шестьдесят на тридцать»), но пишут и в мм.
-    def tile_mm(v: float) -> float:
-        return v * 10 if v < 200 else v
-
-    await state.update_data(tile_w=tile_mm(values[0]), tile_h=tile_mm(values[1]))
+    await state.update_data(tile_w=_tile_mm(values[0]), tile_h=_tile_mm(values[1]))
     await _ask_joint(message, state)
+
+
+def _tile_mm(value: float) -> float:
+    """Плитку меряют в сантиметрах («шестьдесят на тридцать»), но пишут и в мм."""
+    return value * 10 if value < 200 else value
 
 
 async def _ask_joint(message: Message, state: FSMContext) -> None:
@@ -350,12 +354,76 @@ async def got_per_pack(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(per_pack=int(per_pack) or None)
-    await _ask_pattern(message, state)
+    await _after_tile(message, state)
 
 
 @router.callback_query(Tiling.per_pack, F.data == "skip")
 async def skip_per_pack(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(per_pack=None)
+    await call.answer()
+    await _after_tile(call.message, state)
+
+
+# --- Плитка на пол: своя ------------------------------------------------------
+
+
+async def _after_tile(message: Message, state: FSMContext) -> None:
+    """На пол почти всегда идёт другая плитка — керамогранит крупнее настенной."""
+    data = await state.get_data()
+    if data.get("mode") == "room" and data.get("with_floor"):
+        await state.set_state(Tiling.floor_tile_size)
+        await message.answer(
+            "Плитка <b>на пол</b> — ширина и высота:\n\n"
+            "<code>60 60</code>\n"
+            "<i>На пол обычно кладут другую — крупнее настенной. Если та же самая, "
+            "жми кнопку.</i>",
+            reply_markup=kb.SAME_TILE,
+        )
+        return
+    await _ask_pattern(message, state)
+
+
+@router.message(Tiling.floor_tile_size)
+async def got_floor_tile(message: Message, state: FSMContext) -> None:
+    try:
+        values = numbers(message.text or "")
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>60 60</code>", reply_markup=kb.SAME_TILE)
+        return
+    if len(values) != 2 or values[0] <= 0 or values[1] <= 0:
+        await message.answer("Нужно два числа: <code>60 60</code>", reply_markup=kb.SAME_TILE)
+        return
+
+    await state.update_data(floor_w=_tile_mm(values[0]), floor_h=_tile_mm(values[1]))
+    await state.set_state(Tiling.floor_per_pack)
+    await message.answer(
+        "Штук в упаковке <b>напольной</b> плитки:\n\n<code>4</code>",
+        reply_markup=kb.SKIP,
+    )
+
+
+@router.callback_query(Tiling.floor_tile_size, F.data == "same_tile")
+async def floor_same_tile(call: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(floor_w=None, floor_h=None)
+    await call.answer()
+    await _ask_pattern(call.message, state)
+
+
+@router.message(Tiling.floor_per_pack)
+async def got_floor_per_pack(message: Message, state: FSMContext) -> None:
+    try:
+        per_pack = single_number(message.text or "", minimum=0)
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>4</code>", reply_markup=kb.SKIP)
+        return
+
+    await state.update_data(floor_per_pack=int(per_pack) or None)
+    await _ask_pattern(message, state)
+
+
+@router.callback_query(Tiling.floor_per_pack, F.data == "skip")
+async def skip_floor_per_pack(call: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(floor_per_pack=None)
     await call.answer()
     await _ask_pattern(call.message, state)
 
@@ -432,13 +500,26 @@ async def got_waterproofing(call: CallbackQuery, state: FSMContext, storage: Sto
     pattern = LayoutPattern(data["pattern"])
     waste = data.get("waste")
 
+    # На пол мастер мог взять свою плитку — крупнее и своей пачкой.
+    floor_tile = tile
+    if data.get("floor_w"):
+        floor_tile = Tile(
+            width_mm=data["floor_w"],
+            height_mm=data["floor_h"],
+            thickness_mm=data["thickness_mm"],
+            joint_mm=data["joint_mm"],
+            per_pack=data.get("floor_per_pack"),
+        )
+
     layouts: list[Layout] = []
     materials: list[Materials] = []
     walls_tile = _wall_tile(surfaces, tile, pattern, data["start_from"])
     for surface in surfaces:
         # Стены комнаты кладём одной ориентацией; пол сам по себе.
-        fixed = walls_tile if surface.kind is SurfaceKind.WALL else None
-        layout = _lay(surface, fixed or tile, pattern, data["start_from"], turn=fixed is None)
+        on_wall = surface.kind is SurfaceKind.WALL
+        fixed = walls_tile if on_wall else None
+        own = tile if on_wall else floor_tile
+        layout = _lay(surface, fixed or own, pattern, data["start_from"], turn=fixed is None)
         layouts.append(layout)
         materials.append(calc_materials(layout, waterproofing=waterproofing, waste=waste))
 
@@ -679,7 +760,12 @@ async def _redraw(message: Message, user_id: int, storage: Storage, project_id: 
         )
         layouts.append(layout)
         materials.append(
-            calc_materials(layout, waterproofing=saved.waterproofing, waste=saved.waste)
+            calc_materials(
+                layout,
+                waterproofing=saved.waterproofing,
+                waste=saved.waste,
+                grout_kind=saved.grout_kind,
+            )
         )
 
     await _show_result(
@@ -694,6 +780,78 @@ async def _redraw(message: Message, user_id: int, storage: Storage, project_id: 
 
 
 # --- Фото плитки и цвет затирки ----------------------------------------------
+
+
+@router.callback_query(F.data.startswith("resize:"))
+async def ask_resize(call: CallbackQuery, state: FSMContext, storage: Storage) -> None:
+    """Сменить размер плитки — «а если взять другую?» — без пересоздания объекта."""
+    project_id = int(call.data.split(":")[1])
+    project = await storage.get_project(project_id, call.from_user.id)
+    if project is None or not project.surfaces:
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    kinds = {payload_to_surface(r.dump()).surface.kind for r in project.surfaces}
+    await call.answer()
+
+    # Спрашиваем «стены или пол», только если есть и то, и другое: у пола своя плитка.
+    if len(kinds) > 1:
+        await call.message.answer("Где меняем плитку?", reply_markup=kb.tile_target(project_id))
+        return
+
+    only = next(iter(kinds))
+    await _ask_new_size(call.message, state, project_id, only.value)
+
+
+@router.callback_query(F.data.startswith("resizeat:"))
+async def pick_resize_target(call: CallbackQuery, state: FSMContext) -> None:
+    _, raw_id, kind = call.data.split(":")
+    await call.answer()
+    await _ask_new_size(call.message, state, int(raw_id), kind)
+
+
+async def _ask_new_size(message: Message, state: FSMContext, project_id: int, kind: str) -> None:
+    await state.update_data(project_id=project_id, resize_kind=kind)
+    await state.set_state(Tiling.resize)
+    where = "на стенах" if kind == SurfaceKind.WALL.value else "на полу"
+    await message.answer(
+        f"Новый размер плитки {where} — ширина и высота:\n\n<code>30 60</code>\n"
+        "<i>Пересчитаю раскладку и закупку по всему объекту.</i>"
+    )
+
+
+@router.message(Tiling.resize)
+async def got_new_size(message: Message, state: FSMContext, storage: Storage) -> None:
+    try:
+        values = numbers(message.text or "")
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>30 60</code>")
+        return
+    if len(values) != 2 or values[0] <= 0 or values[1] <= 0:
+        await message.answer("Нужно два числа: <code>30 60</code>")
+        return
+
+    data = await state.get_data()
+    project_id, kind = data.get("project_id"), data.get("resize_kind")
+    if project_id is None or kind is None:
+        await state.set_state(None)
+        await message.answer("Не понял, какой объект. Открой его заново.")
+        return
+
+    ok = await storage.set_tile_size(
+        project_id,
+        message.from_user.id,
+        _tile_mm(values[0]),
+        _tile_mm(values[1]),
+        kind=kind,
+    )
+    if not ok:
+        await state.set_state(None)
+        await message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
+        return
+
+    await state.set_state(None)
+    await _redraw(message, message.from_user.id, storage, project_id)
 
 
 @router.callback_query(F.data.startswith("restart:"))
@@ -823,6 +981,37 @@ async def got_tile_price(message: Message, state: FSMContext, storage: Storage) 
     from tilebot.bot.handlers.projects import show_act
 
     await show_act(message, message.from_user.id, storage, project_id)
+
+
+@router.callback_query(F.data.startswith("groutkind:"))
+async def ask_grout_kind(call: CallbackQuery, storage: Storage) -> None:
+    project_id = int(call.data.split(":")[1])
+    project = await storage.get_project(project_id, call.from_user.id)
+    if project is None or not project.surfaces:
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    current = payload_to_surface(project.surfaces[0].dump()).grout_kind
+    await call.answer()
+    await call.message.answer(
+        "Чем затираем?\n\n"
+        "<i>Эпоксидная не боится воды и не темнеет, но затирать её дольше и муторнее — "
+        "это дороже в работе и сама она в разы дороже. Цементная — обычный вариант.</i>",
+        reply_markup=kb.grout_kinds(project_id, current),
+    )
+
+
+@router.callback_query(F.data.startswith("setgroutkind:"))
+async def set_grout_kind(call: CallbackQuery, storage: Storage) -> None:
+    _, raw_id, kind = call.data.split(":")
+    project_id = int(raw_id)
+
+    if not await storage.update_project_surfaces(project_id, call.from_user.id, grout_kind=kind):
+        await call.answer("Объект не найден.", show_alert=True)
+        return
+
+    await call.answer("Пересчитал")
+    await _redraw(call.message, call.from_user.id, storage, project_id)
 
 
 @router.callback_query(F.data.startswith("grout:"))

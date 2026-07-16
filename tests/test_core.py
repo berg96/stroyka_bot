@@ -278,7 +278,7 @@ class TestUnits:
     def test_grout_line_shows_the_real_joint(self):
         lay = build_layout(Surface("стена", 2000, 2500), Tile(600, 300, joint_mm=1.4))
         names = [line.name for line in calc_materials(lay).lines]
-        assert "Затирка (шов 1,4 мм)" in names
+        assert "Затирка цементная (шов 1,4 мм)" in names
 
 
 class TestRoom:
@@ -495,7 +495,19 @@ class TestAngled:
         for pattern in (LayoutPattern.DIAGONAL, LayoutPattern.HERRINGBONE):
             advice = " ".join(self._wall(pattern).advice)
             assert "ровная" not in advice
-            assert "резать" in advice
+            assert "режется весь периметр" in advice
+
+    def test_advice_is_identical_across_walls(self):
+        """В комнате совет сыпался по разу на стену — с разными цифрами.
+
+        Сколько резать, уже сказано строкой «Класть: N шт, резаных M». Совет должен
+        быть одинаковым на всех стенах — тогда сводка покажет его один раз.
+        """
+        tile = Tile(600, 300, joint_mm=2)
+        for pattern in (LayoutPattern.DIAGONAL, LayoutPattern.HERRINGBONE):
+            a = build_layout(Surface("а", 2000, 2700), tile, pattern).advice
+            b = build_layout(Surface("б", 1800, 2700), tile, pattern).advice
+            assert a == b
 
     def test_each_pattern_gives_its_own_scheme(self):
         """Диагональ и ёлочка выдавали схему байт в байт как «шов в шов»."""

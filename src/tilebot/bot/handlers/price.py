@@ -18,7 +18,9 @@ WORK_LABELS = {
     "floor_tiling": "Укладка плитки на пол, ₽/м²",
     "waterproofing": "Гидроизоляция, ₽/м²",
     "priming": "Грунтовка, ₽/м²",
-    "grouting": "Затирка швов, ₽/м²",
+    "grouting": "Затирка швов цементной, ₽/м²",
+    "grouting_epoxy": "Затирка швов эпоксидной, ₽/м²",
+    "cutting": "Подрезка плитки, ₽/шт",
     "demolition": "Демонтаж старой плитки, ₽/м²",
     "min_order": "Минимальный заказ, ₽",
 }
@@ -28,7 +30,8 @@ WORK_LABELS = {
 MATERIAL_LABELS = {
     "mat_tile_m2": "Плитка, ₽/м²",
     "mat_glue_kg": "Клей, ₽/кг",
-    "mat_grout_kg": "Затирка, ₽/кг",
+    "mat_grout_kg": "Затирка цементная, ₽/кг",
+    "mat_grout_epoxy_kg": "Затирка эпоксидная, ₽/кг",
     "mat_primer_l": "Грунтовка, ₽/л",
     "mat_waterproof_kg": "Гидроизоляция, ₽/кг",
     "mat_clip_pcs": "СВП-зажим, ₽/шт",

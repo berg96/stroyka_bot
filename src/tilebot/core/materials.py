@@ -9,7 +9,7 @@ import math
 from dataclasses import dataclass
 
 from tilebot.core.layout import Layout
-from tilebot.core.models import WASTE_BY_PATTERN, SurfaceKind, Tile
+from tilebot.core.models import WASTE_BY_PATTERN, GroutKind, SurfaceKind, Tile
 from tilebot.core.units import fmt_mm
 
 # Гребёнка (высота зуба) по размеру плитки и средний расход сухой смеси.
@@ -24,7 +24,11 @@ TROWEL_TABLE: list[tuple[float, int, float]] = [
     (math.inf, 15, 9.0),
 ]
 
-GROUT_DENSITY = 1.6  # кг/дм³, цементная затирка
+# Плотность затирки, кг/дм³. Эпоксидная тяжелее — и расход по той же формуле выше.
+GROUT_DENSITY: dict[GroutKind, float] = {
+    GroutKind.CEMENT: 1.6,
+    GroutKind.EPOXY: 1.7,
+}
 PRIMER_L_PER_M2 = 0.15  # грунтовка, литров на м² в один слой
 WATERPROOF_KG_PER_M2 = 1.4  # обмазочная гидроизоляция, кг/м² в два слоя
 LEVELING_CLIPS_PER_TILE = 4  # СВП: зажимов на плитку
@@ -69,6 +73,12 @@ class Materials:
     lines: list[MaterialLine]
 
 
+def _grout_name(kind: GroutKind, tile: Tile) -> str:
+    """Вид затирки — в название: в магазине это разные мешки и разные деньги."""
+    label = "эпоксидная" if kind is GroutKind.EPOXY else "цементная"
+    return f"Затирка {label} (шов {fmt_mm(tile.joint_mm)} мм)"
+
+
 def _tile_note(area_m2: float, waste: float, packs: int | None) -> str:
     return f"{area_m2:.1f} м² с запасом {waste:.0%}" + (f", ≈{packs} уп." if packs else "")
 
@@ -94,7 +104,7 @@ def trowel_for(tile: Tile) -> tuple[int, float]:
     raise AssertionError("TROWEL_TABLE должна покрывать любой размер")
 
 
-def grout_kg_per_m2(tile: Tile) -> float:
+def grout_kg_per_m2(tile: Tile, kind: GroutKind = GroutKind.CEMENT) -> float:
     """Расход затирки, кг/м².
 
     Классическая формула: ((A+B)/(A*B)) * толщина плитки * ширина шва * плотность,
@@ -103,7 +113,7 @@ def grout_kg_per_m2(tile: Tile) -> float:
     a, b = tile.width_mm, tile.height_mm
     if a <= 0 or b <= 0 or tile.joint_mm <= 0:
         return 0.0
-    return ((a + b) / (a * b)) * tile.thickness_mm * tile.joint_mm * GROUT_DENSITY
+    return ((a + b) / (a * b)) * tile.thickness_mm * tile.joint_mm * GROUT_DENSITY[kind]
 
 
 def tile_glue_kg(area_m2: float, tile: Tile) -> tuple[float, int]:
@@ -118,6 +128,7 @@ def calc_materials(
     waterproofing: bool = False,
     use_leveling_system: bool = True,
     waste: float | None = None,
+    grout_kind: GroutKind = GroutKind.CEMENT,
 ) -> Materials:
     """Список закупки под одну разложенную поверхность.
 
@@ -136,7 +147,7 @@ def calc_materials(
     packs = math.ceil(tiles / tile.per_pack) if tile.per_pack else None
 
     glue, teeth = tile_glue_kg(area, tile)
-    grout = area * grout_kg_per_m2(tile)
+    grout = area * grout_kg_per_m2(tile, grout_kind)
 
     lines: list[MaterialLine] = [
         MaterialLine(
@@ -157,11 +168,11 @@ def calc_materials(
             note=f"гребёнка {teeth} мм; мешков 25 кг ≈ {math.ceil(glue / 25)}",
         ),
         MaterialLine(
-            name=f"Затирка (шов {fmt_mm(tile.joint_mm)} мм)",
+            name=_grout_name(grout_kind, tile),
             qty=max(1.0, math.ceil(grout * 10) / 10),
             unit="кг",
-            kind="grout",
-            note=f"{grout_kg_per_m2(tile):.2f} кг/м²",
+            kind="grout_epoxy" if grout_kind is GroutKind.EPOXY else "grout",
+            note=f"{grout_kg_per_m2(tile, grout_kind):.2f} кг/м²",
         ),
         MaterialLine(
             name="Грунтовка",

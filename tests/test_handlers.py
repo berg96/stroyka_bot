@@ -73,11 +73,20 @@ class TestRoom:
         assert len([t for t in app.texts if "Купить:" in t]) == 1
         assert app.photos_sent() == 5  # схема на каждую стену и на пол
 
-    async def test_tile_is_one_position_in_the_purchase_list(self, app):
-        """600×300 и 300×600 — одна плитка в магазине."""
-        await _room_flow(app)
+    async def test_wall_tile_is_one_position_in_the_purchase_list(self, app):
+        """600×300 и 300×600 — одна плитка в магазине, а не две позиции."""
+        await _room_flow(app, floor_tile=None)  # везде одна плитка
         summary = next(t for t in app.texts if "Купить:" in t)
         assert summary.count("• Плитка") == 1
+
+    async def test_floor_tile_is_bought_separately(self, app):
+        """На пол своя плитка — значит в списке покупок это отдельная позиция."""
+        await _room_flow(app, floor_tile="60 60")
+        summary = next(t for t in app.texts if "Купить:" in t)
+
+        assert "• Плитка 600×300" in summary  # стены
+        assert "• Плитка 600×600" in summary  # пол
+        assert summary.count("• Плитка") == 2
 
     async def test_room_asks_walls_then_height_separately(self, app):
         await app.send("🧱 Плитка")
@@ -191,8 +200,8 @@ async def _tile_flow(
     await app.click("Не нужна")
 
 
-async def _room_flow(app) -> None:
-    """Ванная целиком: 4 стены, пол, плитка 60×30."""
+async def _room_flow(app, *, floor_tile: str | None = "60 60") -> None:
+    """Ванная целиком: 4 стены 60×30, на полу свой керамогранит 60×60."""
     await app.send("🧱 Плитка")
     await app.click("Комната целиком")
     await app.send("Ванная, Борзова")
@@ -203,6 +212,13 @@ async def _room_flow(app) -> None:
     await app.send("1,4")
     await app.click("9 мм")
     await app.send("8")  # штук в упаковке
+
+    if floor_tile:
+        await app.send(floor_tile)  # плитка на пол — своя
+        await app.send("4")  # штук в упаковке напольной
+    else:
+        await app.click("Такая же, как на стены")
+
     await app.click("Вразбежку")
     await app.click("Как лучше")
     await app.click("7%")
@@ -360,3 +376,141 @@ class TestRotate:
         await app.click("Сменить раскладку")
         await app.click("Ёлочка")
         assert self._tile_line(app) == rotated
+
+
+class TestAdviceInRoom:
+    async def test_angled_advice_is_not_repeated_per_wall(self, app):
+        """Артём: в комнате один и тот же совет прилетал 4 раза с разными цифрами."""
+        await _room_flow(app)
+        await app.click("Сменить раскладку")
+        await app.click("Диагональ")
+
+        summary = [t for t in app.texts if "Купить:" in t][-1]
+        tips = [line for line in summary.splitlines() if line.startswith("💡")]
+        assert len(tips) == len(set(tips)), f"советы дублируются: {tips}"
+        assert sum(1 for t in tips if "Диагональ" in t) == 1
+
+
+class TestFloorTile:
+    """Артём: «у пола может быть другая плитка, другой размер»."""
+
+    async def test_floor_tile_is_asked_only_when_there_is_a_floor(self, app):
+        await _room_flow(app, floor_tile=None)
+        assert app.said("Плитка <b>на пол</b>")
+
+    async def test_walls_only_room_is_not_asked_about_floor_tile(self, app):
+        await app.send("🧱 Плитка")
+        await app.click("Комната целиком")
+        await app.send("Только стены")
+        await app.send("2 1.8 2 1.8")
+        await app.send("2.7")
+        await app.click("Только стены")
+        await app.send("60 30")
+        await app.send("2")
+        await app.click("9 мм")
+        await app.click("Пропустить")
+
+        assert not app.said("Плитка <b>на пол</b>")
+        assert app.said("Как кладём")
+
+    async def test_same_tile_button_keeps_one_position(self, app):
+        await _room_flow(app, floor_tile=None)
+        summary = next(t for t in app.texts if "Купить:" in t)
+        assert summary.count("• Плитка") == 1
+
+
+class TestResize:
+    """Артём: «надо оперативно менять размер плитки, чтобы считать быстрее»."""
+
+    def _tiles(self, app):
+        summary = [t for t in app.texts if "Купить:" in t][-1]
+        return [x for x in summary.splitlines() if x.startswith("• Плитка")]
+
+    async def test_wall_tile_size_can_be_changed(self, app):
+        await _room_flow(app, floor_tile="60 60")
+        before = self._tiles(app)
+
+        await app.click("Размер плитки")
+        await app.click("Стены")
+        await app.send("20 20")  # мелкая плитка — и штук станет заметно больше
+        after = self._tiles(app)
+
+        assert before != after
+        assert any("200×200" in x for x in after), after
+        assert not any("600×300" in x for x in after), "старая плитка осталась"
+        # Пол не трогали — он остался своим.
+        assert any("600×600" in x for x in after), after
+
+    async def test_floor_tile_size_can_be_changed_separately(self, app):
+        await _room_flow(app, floor_tile="60 60")
+
+        await app.click("Размер плитки")
+        await app.click("Пол")
+        await app.send("30 30")
+
+        tiles = self._tiles(app)
+        assert any("300×300" in x for x in tiles), tiles
+        assert any("600×300" in x for x in tiles), "стены не должны были поменяться"
+
+    async def test_single_surface_is_not_asked_where(self, app):
+        """Если поверхность одна, спрашивать «стены или пол» незачем."""
+        await _tile_flow(app)
+        await app.click("Размер плитки")
+        assert app.said("Новый размер плитки")
+
+
+class TestGroutKind:
+    """Артём согласовал: затирка двух видов. Эпоксидная бьёт по работе, не по мешку."""
+
+    async def test_grout_kind_can_be_switched(self, app):
+        await _room_flow(app)
+        await app.click("Вид затирки")
+        assert app.find_button("Цементная ✓") is not None
+
+        await app.click("Эпоксидная")
+        summary = [t for t in app.texts if "Купить:" in t][-1]
+        assert "Затирка эпоксидная" in summary
+
+    async def test_epoxy_costs_more_in_work_not_in_the_bag(self, app):
+        await _room_flow(app)
+        await app.click("Смета заказчику")
+        cement = [t for t in app.texts if "РАБОТА:" in t][-1]
+
+        await app.click("Вид затирки")
+        await app.click("Эпоксидная")
+        await app.click("Смета заказчику")
+        epoxy = [t for t in app.texts if "РАБОТА:" in t][-1]
+
+        assert "Затирка швов эпоксидной" in epoxy
+        assert cement != epoxy
+
+
+class TestCutting:
+    """Артём: «работа плиточника должна зависеть от раскладки и количества подрезки»."""
+
+    async def test_cutting_is_a_separate_work_line(self, app):
+        await _room_flow(app)
+        await app.click("Смета заказчику")
+        assert app.said("Подрезка плитки")
+
+    async def test_diagonal_costs_more_than_straight(self, app):
+        await _room_flow(app)
+        await app.click("Сменить раскладку")
+        await app.click("Шов в шов")
+        await app.click("Смета заказчику")
+        straight = _work_total(app)
+
+        await app.click("Сменить раскладку")
+        await app.click("Диагональ")
+        await app.click("Смета заказчику")
+        diagonal = _work_total(app)
+
+        # И надбавка за раскладку, и рез: на диагонали режется весь периметр.
+        assert diagonal > straight
+        assert app.said("Надбавка за раскладку (диагональ)")
+
+
+def _work_total(app) -> int:
+    line = [t for t in app.texts if "РАБОТА:" in t][-1]
+    row = next(x for x in line.splitlines() if "РАБОТА:" in x)
+    return int("".join(ch for ch in row if ch.isdigit()))

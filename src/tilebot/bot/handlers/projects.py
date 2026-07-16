@@ -15,6 +15,7 @@ from tilebot.bot.handlers.tiling import Tiling
 from tilebot.core.estimate import build_estimate, format_act, format_estimate, money
 from tilebot.core.layout import Layout, build_layout
 from tilebot.core.materials import Materials, calc_materials, merge_materials
+from tilebot.core.models import GroutKind
 from tilebot.render.pdf import render_estimate_pdf
 from tilebot.render.scheme import render_layout
 from tilebot.storage import Project, Storage, payload_to_surface
@@ -27,22 +28,29 @@ logger = logging.getLogger(__name__)
 NOT_YOURS = "Объект не найден."
 
 
-def _rebuild(project: Project) -> tuple[list[Layout], list[Materials], bool]:
+def _rebuild(project: Project) -> tuple[list[Layout], list[Materials], bool, GroutKind]:
     """Пересобрать раскладки объекта из сохранённых замеров."""
     layouts: list[Layout] = []
     materials: list[Materials] = []
     waterproofing = False
+    grout_kind = GroutKind.CEMENT
 
     for row in project.surfaces:
         saved = payload_to_surface(row.dump())
         layout = build_layout(saved.surface, saved.tile, saved.pattern, saved.start_from)
         layouts.append(layout)
         materials.append(
-            calc_materials(layout, waterproofing=saved.waterproofing, waste=saved.waste)
+            calc_materials(
+                layout,
+                waterproofing=saved.waterproofing,
+                waste=saved.waste,
+                grout_kind=saved.grout_kind,
+            )
         )
         waterproofing = waterproofing or saved.waterproofing
+        grout_kind = saved.grout_kind
 
-    return layouts, materials, waterproofing
+    return layouts, materials, waterproofing, grout_kind
 
 
 @router.message(F.text == "📋 Мои объекты")
@@ -95,7 +103,7 @@ async def summary(call: CallbackQuery, storage: Storage) -> None:
         await call.message.answer("В объекте пока нет поверхностей.")
         return
 
-    layouts, materials, _ = _rebuild(project)
+    layouts, materials, _, _ = _rebuild(project)
     total_area = sum(lay.surface.net_area_m2 for lay in layouts)
     total_tiles = sum(m.tiles_count for m in materials)
 
@@ -141,7 +149,7 @@ async def estimate(call: CallbackQuery, storage: Storage, state: FSMContext) -> 
         return
 
     user = await storage.get_or_create_user(call.from_user.id)
-    layouts, materials, waterproofing = _rebuild(project)
+    layouts, materials, waterproofing, grout_kind = _rebuild(project)
 
     est = build_estimate(
         project.title,
@@ -149,6 +157,8 @@ async def estimate(call: CallbackQuery, storage: Storage, state: FSMContext) -> 
         materials,
         user.price,
         waterproofing=waterproofing,
+        grout_kind=grout_kind,
+        include_materials_cost=False,
     )
 
     await call.message.answer(format_estimate(est))
@@ -197,13 +207,14 @@ async def show_act(message: Message, user_id: int, storage: Storage, project_id:
         return
 
     user = await storage.get_or_create_user(user_id)
-    layouts, materials, waterproofing = _rebuild(project)
+    layouts, materials, waterproofing, grout_kind = _rebuild(project)
     est = build_estimate(
         project.title,
         layouts,
         materials,
         user.price,
         waterproofing=waterproofing,
+        grout_kind=grout_kind,
         include_materials_cost=True,
     )
     await message.answer(format_act(est), reply_markup=kb.project_actions(project_id))

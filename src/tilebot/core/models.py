@@ -22,6 +22,14 @@ class LayoutPattern(StrEnum):
     HERRINGBONE = "herringbone"  # ёлочка
 
 
+class GroutKind(StrEnum):
+    """Вид затирки. Эпоксидную дольше и муторнее затирать — это дороже в работе,
+    и расход у неё другой: она плотнее цементной."""
+
+    CEMENT = "cement"
+    EPOXY = "epoxy"
+
+
 class StartFrom(StrEnum):
     """Откуда начинается раскладка по горизонтали."""
 

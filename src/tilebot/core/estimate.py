@@ -14,9 +14,18 @@ from dataclasses import dataclass, field
 
 from tilebot.core.layout import Layout
 from tilebot.core.materials import MaterialLine, Materials, merge_materials
-from tilebot.core.models import LayoutPattern, SurfaceKind
+from tilebot.core.models import GroutKind, LayoutPattern, SurfaceKind
 
-# Надбавка за сложную раскладку: резать больше, класть дольше.
+# По-русски, а не enum'ом: строка уходит заказчику в смету.
+PATTERN_TITLES: dict[LayoutPattern, str] = {
+    LayoutPattern.STRAIGHT: "шов в шов",
+    LayoutPattern.BRICK: "вразбежку",
+    LayoutPattern.DIAGONAL: "диагональ",
+    LayoutPattern.HERRINGBONE: "ёлочка",
+}
+
+# Надбавка за сложную раскладку: класть дольше, рисунок надо держать. Рез считается
+# отдельной строкой — по фактическому числу подрезанных плиток.
 PATTERN_SURCHARGE: dict[LayoutPattern, float] = {
     LayoutPattern.STRAIGHT: 0.0,
     LayoutPattern.BRICK: 0.0,
@@ -33,8 +42,10 @@ class PriceList:
     floor_tiling: float = 1000.0  # на пол, ₽/м²
     waterproofing: float = 400.0  # гидроизоляция, ₽/м²
     priming: float = 100.0  # грунтовка, ₽/м²
-    grouting: float = 200.0  # затирка швов, ₽/м²
+    grouting: float = 200.0  # затирка швов цементной, ₽/м²
+    grouting_epoxy: float = 450.0  # эпоксидной — дольше и муторнее, ₽/м²
     demolition: float = 500.0  # демонтаж старой плитки, ₽/м²
+    cutting: float = 60.0  # рез плитки, ₽/шт — считается по факту раскладки
     min_order: float = 0.0  # минимальный чек за выезд
 
     # Справочные цены материалов — чтобы в смете была прикидка «во сколько выйдет
@@ -43,6 +54,7 @@ class PriceList:
     mat_tile_m2: float = 1500.0  # плитка, ₽/м² — разброс самый большой
     mat_glue_kg: float = 18.0  # мешок 25 кг ≈ 450 ₽
     mat_grout_kg: float = 175.0  # цементная, пачка 2 кг ≈ 350 ₽
+    mat_grout_epoxy_kg: float = 1200.0  # эпоксидная, от 1899 ₽ за упаковку
     mat_primer_l: float = 80.0  # канистра 10 л ≈ 800 ₽
     mat_waterproof_kg: float = 150.0  # ведро 20 кг ≈ 3000 ₽
     mat_clip_pcs: float = 4.0  # СВП-зажимы, 100 шт ≈ 400 ₽
@@ -56,6 +68,7 @@ MATERIAL_PRICE_FIELDS: dict[str, str] = {
     "tile": "mat_tile_m2",
     "glue": "mat_glue_kg",
     "grout": "mat_grout_kg",
+    "grout_epoxy": "mat_grout_epoxy_kg",
     "primer": "mat_primer_l",
     "waterproof": "mat_waterproof_kg",
     "clips": "mat_clip_pcs",
@@ -144,6 +157,7 @@ def build_estimate(
     waterproofing: bool = False,
     demolition_m2: float = 0.0,
     include_materials_cost: bool = True,
+    grout_kind: GroutKind = GroutKind.CEMENT,
 ) -> Estimate:
     """Смета по объекту: работы по площадям поверхностей + материалы по ценам плитки.
 
@@ -177,16 +191,34 @@ def build_estimate(
         base = wall_area * price.wall_tiling + floor_area * price.floor_tiling
         est.works.append(
             WorkLine(
-                f"Надбавка за раскладку ({pattern_name.value}), +{surcharge:.0%}",
+                f"Надбавка за раскладку ({PATTERN_TITLES[pattern_name]}), +{surcharge:.0%}",
                 1,
                 "",
                 round(base * surcharge, 2),
             )
         )
 
+    # Рез — отдельная работа, а не часть укладки: на диагонали режется весь периметр,
+    # и это руками, по одной плитке. Надбавка за раскладку — за сложность самой
+    # кладки (рисунок, углы), а рез считаем по факту: сколько плиток, столько и резов.
+    cuts = sum(lay.cuts_count for lay in layouts)
+    if cuts and price.cutting:
+        est.works.append(
+            WorkLine("Подрезка плитки", cuts, "шт", price.cutting)
+        )
+
     if total_area > 0:
         est.works.append(WorkLine("Грунтование", round(total_area, 2), "м²", price.priming))
-        est.works.append(WorkLine("Затирка швов", round(total_area, 2), "м²", price.grouting))
+        # Эпоксидную затирать дольше и муторнее — это дороже в работе, а не в мешке.
+        epoxy = grout_kind is GroutKind.EPOXY
+        est.works.append(
+            WorkLine(
+                "Затирка швов" + (" эпоксидной" if epoxy else ""),
+                round(total_area, 2),
+                "м²",
+                price.grouting_epoxy if epoxy else price.grouting,
+            )
+        )
     if waterproofing and total_area > 0:
         est.works.append(
             WorkLine("Гидроизоляция", round(total_area, 2), "м²", price.waterproofing)
