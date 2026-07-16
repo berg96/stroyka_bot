@@ -20,7 +20,7 @@ from aiogram.types import Message as TgMessage
 from aiogram.types import User as TgUser
 from PIL import Image, ImageDraw
 
-from tilebot.bot.handlers import area, tiling
+from tilebot.bot.handlers import area, price, projects, tiling
 from tilebot.storage import Storage
 
 SASHA = 383853880
@@ -93,6 +93,9 @@ class BotHarness:
         self.session = session
         self._update_id = 0
         self._message_id = 0
+        # Клавиатуры, отправленные до forget(): в чате они никуда не делись, и
+        # мастер может нажать их и позже.
+        self._offscreen: list[TelegramMethod[Any]] = []
 
     def _next_update(self) -> int:
         self._update_id += 1
@@ -174,8 +177,8 @@ class BotHarness:
         return any(fragment in t for t in self.texts)
 
     def find_button(self, title: str) -> str | None:
-        """callback_data кнопки — ищем с конца, по последним клавиатурам."""
-        for method in reversed(self.session.sent):
+        """callback_data кнопки — ищем с конца, по всем клавиатурам, что бот прислал."""
+        for method in reversed([*self._offscreen, *self.session.sent]):
             markup = getattr(method, "reply_markup", None)
             if not isinstance(markup, InlineKeyboardMarkup):
                 continue
@@ -209,7 +212,11 @@ class BotHarness:
         ]
 
     def forget(self) -> None:
-        """Забыть переписку — чтобы проверять только то, что после этой точки."""
+        """Забыть сказанное — чтобы проверять только то, что бот ответил дальше.
+
+        Кнопки при этом остаются доступными: в чате они на экране и после.
+        """
+        self._offscreen.extend(self.session.sent)
         self.session.sent.clear()
 
 
@@ -228,7 +235,7 @@ async def app(storage) -> BotHarness:
     dp = Dispatcher()
     # Роутеры живут в модулях, то есть одни и те же на весь прогон, а Dispatcher
     # у каждого теста свой — отвязываем от прошлого, иначе include_router ругнётся.
-    for router in (tiling.router, area.router):
+    for router in (tiling.router, area.router, projects.router, price.router):
         router._parent_router = None
         dp.include_router(router)
 

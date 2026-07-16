@@ -309,6 +309,23 @@ class Storage:
             project_id, tg_id, pattern=pattern, waste=None
         )
 
+    async def set_tile_price(self, project_id: int, tg_id: int, price: float | None) -> bool:
+        """Цена плитки за м² — только если мастер закупается сам и сам попросил.
+
+        Лежит внутри плитки, поэтому отдельным методом: update_project_surfaces
+        правит верхний уровень payload.
+        """
+        if not await self.owns(project_id, tg_id):
+            return False
+        async with self.session() as s:
+            result = await s.execute(select(SurfaceRow).where(SurfaceRow.project_id == project_id))
+            for row in result.scalars():
+                data = json.loads(row.payload_json)
+                data["tile"]["price_per_m2"] = price
+                row.payload_json = json.dumps(data, ensure_ascii=False)
+            await s.commit()
+        return True
+
     async def get_surface(self, surface_id: int, tg_id: int) -> SurfaceRow | None:
         """Поверхность по id — только внутри объекта этого мастера."""
         async with self.session() as s:

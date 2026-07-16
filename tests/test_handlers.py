@@ -51,6 +51,17 @@ class TestOpenings:
         assert app.find_button("Учесть проём") is not None
 
 
+class TestPrice:
+    async def test_tile_price_is_not_asked_in_the_flow(self, app):
+        """Мастер продаёт работу; плитку заказчик покупает сам по списку.
+
+        Цена плитки в потоке — лишний шаг ради строки, которой в смете быть не должно.
+        """
+        await _room_flow(app)
+        assert not app.said("Цена плитки")
+        assert not app.said("Плитка на ")
+
+
 class TestRoom:
     async def test_whole_room_gives_one_purchase_list(self, app):
         """Главное замечание: бот считал по одной стене, на ванную выходило 4 сметы."""
@@ -169,8 +180,7 @@ async def _tile_flow(
         await app.send(joint)
 
     await app.click("9 мм")
-    await app.click("Пропустить")  # цена
-    await app.click("Пропустить")  # упаковка
+    await app.click("Пропустить")  # штук в упаковке
     await app.click("Шов в шов")
     await app.click("От угла")
 
@@ -192,8 +202,7 @@ async def _room_flow(app) -> None:
     await app.send("60 30")
     await app.send("1,4")
     await app.click("9 мм")
-    await app.send("1450")
-    await app.send("8")
+    await app.send("8")  # штук в упаковке
     await app.click("Вразбежку")
     await app.click("Как лучше")
     await app.click("7%")
@@ -262,3 +271,44 @@ class TestGrout:
         await app.click("Бежевая")
         await app.click("Цвет затирки")
         assert app.find_button("Бежевая ✓") is not None
+
+
+class TestEstimateAndAct:
+    """Смета — до работ и по прайсу. Акт — после, по факту."""
+
+    async def test_estimate_shows_rough_material_cost(self, app):
+        """Артём: примерная стоимость материалов — чтобы прикинуть, во сколько выйдёт всё."""
+        await _room_flow(app)
+        app.forget()
+        await app.click("Смета заказчику")
+
+        assert app.said("РАБОТА:")
+        assert app.said("ВСЁ ВМЕСТЕ ≈")
+        assert app.said("можно взять дешевле или дороже")
+
+    async def test_estimate_does_not_sell_materials(self, app):
+        """Материалы — не заработок мастера: в стоимость работы они не входят."""
+        await _room_flow(app)
+        app.forget()
+        await app.click("Смета заказчику")
+        assert app.said("в стоимость работы они не входят")
+
+    async def test_act_asks_the_real_price_then_totals(self, app):
+        await _room_flow(app)
+        app.forget()
+        await app.click("Акт выполненных работ")
+        assert app.said("Почём вышла плитка")
+
+        await app.send("1450")
+        assert app.said("Акт выполненных работ —")
+        assert app.said("ИТОГО К ОПЛАТЕ:")
+
+    async def test_act_without_own_purchase_is_work_only(self, app):
+        """Плитку купил заказчик — в акте только работа."""
+        await _room_flow(app)
+        await app.click("Акт выполненных работ")
+        app.forget()
+        await app.send("0")
+
+        assert app.said("ИТОГО К ОПЛАТЕ:")
+        assert app.said("куплено заказчиком")

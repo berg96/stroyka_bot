@@ -145,6 +145,9 @@ def after_surface(project_id: int) -> InlineKeyboardMarkup:
     b.button(text="➕ Ещё стена / пол", callback_data=f"add_surface:{project_id}")
     b.button(text="🧾 Итог по объекту", callback_data=f"summary:{project_id}")
     b.button(text="💵 Смета заказчику", callback_data=f"estimate:{project_id}")
+    # Смета — до работ и по прайсу. Акт — после: по факту, с материалами, если
+    # мастер закупался сам.
+    b.button(text="📄 Акт выполненных работ", callback_data=f"act:{project_id}")
     b.adjust(1, 2, 1)
     return b.as_markup()
 
@@ -227,6 +230,15 @@ def price_fields() -> InlineKeyboardMarkup:
         ("grouting", "Затирка швов, ₽/м²"),
         ("demolition", "Демонтаж, ₽/м²"),
         ("min_order", "Минимальный заказ, ₽"),
+        # Справочные цены материалов — правятся так же, как расценки на работу.
+        ("mat_tile_m2", "🧱 Плитка, ₽/м²"),
+        ("mat_glue_kg", "🧱 Клей, ₽/кг"),
+        ("mat_grout_kg", "🧱 Затирка, ₽/кг"),
+        ("mat_primer_l", "🧱 Грунтовка, ₽/л"),
+        ("mat_waterproof_kg", "🧱 Гидроизоляция, ₽/кг"),
+        ("mat_clip_pcs", "🧱 СВП-зажим, ₽/шт"),
+        ("mat_cross_pcs", "🧱 Крестик, ₽/шт"),
+        ("mat_tape_m", "🧱 Гидролента, ₽/м"),
     ):
         b.button(text=label, callback_data=f"price:{field}")
     b.adjust(1)

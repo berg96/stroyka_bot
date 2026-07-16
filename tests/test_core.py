@@ -4,6 +4,7 @@ import math
 import pytest
 from PIL import Image
 
+from tilebot.core.estimate import PriceList, rough_material_cost, tile_paid_area_m2
 from tilebot.core.geometry import (
     GeometryError,
     Part,
@@ -391,3 +392,45 @@ class TestScheme:
 
     def test_photo_is_not_required(self):
         assert len(render_layout(self._wall(), grout="black")) > 0
+
+
+class TestTilePacks:
+    """Цену плитки пишут за м², а продают упаковками — платить придётся за пачки."""
+
+    def _tile_line(self, per_pack):
+        lay = build_layout(Surface("стена", 2000, 2700), Tile(600, 300, per_pack=per_pack))
+        mats = calc_materials(lay)
+        return next(x for x in mats.lines if x.kind == "tile")
+
+    def test_paid_area_is_rounded_up_to_whole_packs(self):
+        line = self._tile_line(per_pack=8)
+        packs = math.ceil(line.qty / 8)
+        # Платим за целые пачки: 8 плиток по 0.18 м² в каждой.
+        assert tile_paid_area_m2(line) == pytest.approx(packs * 8 * 0.18)
+        assert tile_paid_area_m2(line) >= line.area_m2
+
+    def test_without_packs_we_fall_back_to_area(self):
+        line = self._tile_line(per_pack=None)
+        assert tile_paid_area_m2(line) == pytest.approx(line.area_m2)
+
+    def test_rough_cost_uses_paid_packs_not_bare_area(self):
+        """По голой площади чек занижался — плитку не продают по метру."""
+        line = self._tile_line(per_pack=8)
+        price = PriceList(mat_tile_m2=1500)
+        assert rough_material_cost(line, price) == pytest.approx(tile_paid_area_m2(line) * 1500)
+        assert rough_material_cost(line, price) > (line.area_m2 or 0) * 1500
+
+    def test_packs_survive_the_room_summary(self):
+        """Смета берёт сведённую закупку: если per_pack там теряется, упаковок нет.
+
+        Ровно так и было — цена считалась по голой площади, а «уп.» не показывались.
+        """
+        walls = room_surfaces([2, 1.8, 2, 1.8], 2.7, with_floor=False)
+        # 9 штук в пачке: нужное количество на пачки нацело не делится, значит
+        # часть последней пачки уйдёт в остаток — и заплатить придётся за неё целиком.
+        mats = [calc_materials(build_layout(w, Tile(600, 300, per_pack=9))) for w in walls]
+        line = next(x for x in merge_materials(mats) if x.kind == "tile")
+
+        assert line.per_pack == 9
+        assert line.qty % 9 != 0, "нужен случай, где пачка не делится нацело"
+        assert tile_paid_area_m2(line) > (line.area_m2 or 0)

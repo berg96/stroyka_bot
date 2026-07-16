@@ -35,6 +35,9 @@ CROSSES_PER_TILE = 4  # крестики на плитку
 class MaterialLine:
     """Строка списка закупки.
 
+    kind — что это за материал. По нему берётся справочная цена для прикидки:
+    привязываться к названию строкой нельзя, оно меняется («Затирка (шов 2 мм)»).
+
     area_m2/per_pack/waste заполнены только у плитки: при сводке по объекту её
     метры и упаковки надо пересчитать от суммарного количества, а не тащить
     подпись первой стены.
@@ -44,6 +47,7 @@ class MaterialLine:
     qty: float
     unit: str
     note: str = ""
+    kind: str = ""
     area_m2: float | None = None
     per_pack: int | None = None
     waste: float | None = None
@@ -140,6 +144,7 @@ def calc_materials(
             qty=tiles,
             unit="шт",
             note=_tile_note(tile_area_waste, waste, packs),
+            kind="tile",
             area_m2=tile_area_waste,
             per_pack=tile.per_pack,
             waste=waste,
@@ -148,18 +153,21 @@ def calc_materials(
             name="Плиточный клей",
             qty=math.ceil(glue),
             unit="кг",
+            kind="glue",
             note=f"гребёнка {teeth} мм; мешков 25 кг ≈ {math.ceil(glue / 25)}",
         ),
         MaterialLine(
             name=f"Затирка (шов {fmt_mm(tile.joint_mm)} мм)",
             qty=max(1.0, math.ceil(grout * 10) / 10),
             unit="кг",
+            kind="grout",
             note=f"{grout_kg_per_m2(tile):.2f} кг/м²",
         ),
         MaterialLine(
             name="Грунтовка",
             qty=math.ceil(area * PRIMER_L_PER_M2 * 10) / 10,
             unit="л",
+            kind="primer",
             note=f"{PRIMER_L_PER_M2} л/м², один слой",
         ),
     ]
@@ -171,6 +179,7 @@ def calc_materials(
                 name="СВП, зажимы",
                 qty=clips,
                 unit="шт",
+                kind="clips",
                 note=f"≈{LEVELING_CLIPS_PER_TILE} на плитку; клинья многоразовые",
             )
         )
@@ -180,6 +189,7 @@ def calc_materials(
                 name="Крестики",
                 qty=layout.tiles_grid * CROSSES_PER_TILE,
                 unit="шт",
+                kind="crosses",
                 note=f"{fmt_mm(tile.joint_mm)} мм",
             )
         )
@@ -190,6 +200,7 @@ def calc_materials(
                 name="Гидроизоляция обмазочная",
                 qty=math.ceil(area * WATERPROOF_KG_PER_M2),
                 unit="кг",
+                kind="waterproof",
                 note=f"{WATERPROOF_KG_PER_M2} кг/м², два слоя",
             )
         )
@@ -199,6 +210,7 @@ def calc_materials(
                     name="Гидроизоляционная лента",
                     qty=math.ceil(2 * (surface.width_mm + surface.height_mm) / 1000),
                     unit="м",
+                    kind="tape",
                     note="по периметру, в углы",
                 )
             )
@@ -239,5 +251,18 @@ def merge_materials(items: list[Materials]) -> list[MaterialLine]:
             # Плитка: и метры, и упаковки считаем от всего объекта разом.
             packs = math.ceil(qty / line.per_pack) if line.per_pack else None
             note = _tile_note(key_area, line.waste or 0.0, packs)
-        out.append(MaterialLine(name=name, qty=qty, unit=unit, note=note))
+        out.append(
+            MaterialLine(
+                name=name,
+                qty=qty,
+                unit=unit,
+                note=note,
+                kind=line.kind,
+                area_m2=area.get((name, unit)),
+                # per_pack и waste обязаны пережить сведение: по ним считаются
+                # упаковки и цена. Без них плитка «продаётся» по метру.
+                per_pack=line.per_pack,
+                waste=line.waste,
+            )
+        )
     return out

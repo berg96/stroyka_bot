@@ -13,7 +13,7 @@ from tilebot.storage import Storage
 
 router = Router(name="price")
 
-LABELS = {
+WORK_LABELS = {
     "wall_tiling": "Укладка плитки на стену, ₽/м²",
     "floor_tiling": "Укладка плитки на пол, ₽/м²",
     "waterproofing": "Гидроизоляция, ₽/м²",
@@ -22,6 +22,21 @@ LABELS = {
     "demolition": "Демонтаж старой плитки, ₽/м²",
     "min_order": "Минимальный заказ, ₽",
 }
+
+# Справочные цены материалов — по ним в смете считается прикидка «во сколько
+# выйдет всё». Это не заработок мастера, а ориентир для заказчика.
+MATERIAL_LABELS = {
+    "mat_tile_m2": "Плитка, ₽/м²",
+    "mat_glue_kg": "Клей, ₽/кг",
+    "mat_grout_kg": "Затирка, ₽/кг",
+    "mat_primer_l": "Грунтовка, ₽/л",
+    "mat_waterproof_kg": "Гидроизоляция, ₽/кг",
+    "mat_clip_pcs": "СВП-зажим, ₽/шт",
+    "mat_cross_pcs": "Крестик, ₽/шт",
+    "mat_tape_m": "Гидролента, ₽/м",
+}
+
+LABELS = {**WORK_LABELS, **MATERIAL_LABELS}
 
 
 class Price(StatesGroup):
@@ -35,8 +50,14 @@ async def show_price(message: Message, storage: Storage) -> None:
     price = user.price
 
     lines = ["<b>Твой прайс</b>", "<i>По нему считается смета заказчику.</i>", ""]
-    for field, label in LABELS.items():
+    lines.append("<b>Работа</b>")
+    for field, label in WORK_LABELS.items():
         lines.append(f"• {label}: <b>{money(getattr(price, field))}</b>")
+
+    lines += ["", "<b>Материалы — для прикидки в смете</b>"]
+    for field, label in MATERIAL_LABELS.items():
+        lines.append(f"• {label}: <b>{money(getattr(price, field))}</b>")
+    lines.append("<i>Это не твой заработок — ориентир заказчику, сколько выйдет всё.</i>")
 
     signature = " · ".join(x for x in (user.name, user.phone) if x)
     lines += ["", f"Подпись в смете: {signature or '<i>не задана</i>'} — /подпись"]

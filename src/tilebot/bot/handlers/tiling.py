@@ -326,31 +326,11 @@ async def got_thickness_custom(message: Message, state: FSMContext) -> None:
 
 
 async def _thickness_done(message: Message, state: FSMContext, thickness: float) -> None:
+    # Цену плитки здесь не спрашиваем: мастер продаёт работу, а плитку заказчик
+    # покупает сам по списку. Посчитать материалы в деньгах можно потом кнопкой —
+    # это нужно, только если мастер закупается сам.
     await state.update_data(thickness_mm=thickness)
-    await state.set_state(Tiling.price)
-    await message.answer(
-        "Цена плитки за м², если считаем смету:\n\n<code>1450</code>",
-        reply_markup=kb.SKIP,
-    )
-
-
-@router.message(Tiling.price)
-async def got_price(message: Message, state: FSMContext) -> None:
-    try:
-        price = single_number(message.text or "", minimum=0)
-    except ParseError as e:
-        await message.answer(f"{e}\n\nПример: <code>1450</code>", reply_markup=kb.SKIP)
-        return
-
-    await state.update_data(price_per_m2=price or None)
     await _ask_per_pack(message, state)
-
-
-@router.callback_query(Tiling.price, F.data == "skip")
-async def skip_price(call: CallbackQuery, state: FSMContext) -> None:
-    await state.update_data(price_per_m2=None)
-    await call.answer()
-    await _ask_per_pack(call.message, state)
 
 
 async def _ask_per_pack(message: Message, state: FSMContext) -> None:
@@ -753,6 +733,36 @@ async def got_tile_photo(message: Message, state: FSMContext, storage: Storage) 
 @router.message(Tiling.tile_photo, ~F.photo)
 async def not_a_tile_photo(message: Message) -> None:
     await message.answer("Жду фото плитки. Или жми любую кнопку меню.")
+
+
+@router.message(Tiling.price)
+async def got_tile_price(message: Message, state: FSMContext, storage: Storage) -> None:
+    """Фактическая цена плитки — для акта, когда мастер закупался сам."""
+    try:
+        price = single_number(message.text or "", minimum=0)
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>1450</code>")
+        return
+
+    data = await state.get_data()
+    project_id = data.get("project_id")
+    if project_id is None:
+        await state.set_state(None)
+        await message.answer("Не понял, к какому объекту. Открой его заново.")
+        return
+
+    if not await storage.set_tile_price(project_id, message.from_user.id, price or None):
+        await state.set_state(None)
+        await message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
+        return
+
+    await state.set_state(None)
+    await message.answer(f"Записал: плитка по {money(price)} за м².")
+
+    # Импорт по месту: projects импортирует состояния отсюда — иначе круг.
+    from tilebot.bot.handlers.projects import show_act
+
+    await show_act(message, message.from_user.id, storage, project_id)
 
 
 @router.callback_query(F.data.startswith("grout:"))

@@ -11,7 +11,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from tilebot.bot import keyboards as kb
-from tilebot.core.estimate import build_estimate, format_estimate, money
+from tilebot.bot.handlers.tiling import Tiling
+from tilebot.core.estimate import build_estimate, format_act, format_estimate, money
 from tilebot.core.layout import Layout, build_layout
 from tilebot.core.materials import Materials, calc_materials, merge_materials
 from tilebot.render.pdf import render_estimate_pdf
@@ -163,6 +164,49 @@ async def estimate(call: CallbackQuery, storage: Storage, state: FSMContext) -> 
         BufferedInputFile(pdf, filename=f"Смета — {safe_title or 'объект'}.pdf"),
         caption="Смета со схемами раскладки — можно переслать заказчику.",
     )
+
+
+@router.callback_query(F.data.startswith("act:"))
+async def act(call: CallbackQuery, state: FSMContext, storage: Storage) -> None:
+    """Акт по факту. Если мастер закупался сам — сначала спросим, почём вышла плитка."""
+    project_id = int(call.data.split(":")[1])
+    project = await storage.get_project(project_id, call.from_user.id)
+    await call.answer()
+    if not project or not project.surfaces:
+        await call.message.answer(NOT_YOURS if not project else "В объекте нет поверхностей.")
+        return
+
+    known_price = any(payload_to_surface(r.dump()).tile.price_per_m2 for r in project.surfaces)
+    if not known_price:
+        await state.update_data(project_id=project_id)
+        await state.set_state(Tiling.price)
+        await call.message.answer(
+            "Почём вышла плитка за м²?\n\n<code>1450</code>\n\n"
+            "<i>Это для акта — сколько заказчик вернёт за материалы. Если плитку "
+            "покупал он сам, поставь <code>0</code>: в акт пойдёт только работа.</i>"
+        )
+        return
+
+    await show_act(call.message, call.from_user.id, storage, project_id)
+
+
+async def show_act(message: Message, user_id: int, storage: Storage, project_id: int) -> None:
+    project = await storage.get_project(project_id, user_id)
+    if not project:
+        await message.answer(NOT_YOURS)
+        return
+
+    user = await storage.get_or_create_user(user_id)
+    layouts, materials, waterproofing = _rebuild(project)
+    est = build_estimate(
+        project.title,
+        layouts,
+        materials,
+        user.price,
+        waterproofing=waterproofing,
+        include_materials_cost=True,
+    )
+    await message.answer(format_act(est), reply_markup=kb.project_actions(project_id))
 
 
 @router.callback_query(F.data.startswith("delete:"))
