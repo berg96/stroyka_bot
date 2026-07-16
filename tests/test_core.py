@@ -573,3 +573,43 @@ class TestBrickOffset:
         assert abs(rows[0] - rows[1]) == pytest.approx(step / 3, abs=2)
         assert abs(rows[1] - rows[2]) == pytest.approx(step / 3, abs=2)
         assert rows[0] != pytest.approx(rows[2], abs=2), "при 1/3 через ряд возврата нет"
+
+
+class TestRowFitsTheWall:
+    """Ряд обязан лечь в стену ровно: плитки + швы = ширина, без потерь."""
+
+    def _rows(self, width, start, tile_w=600, joint=2):
+        lay = build_layout(
+            Surface("с", width, 2700), Tile(tile_w, 300, joint_mm=joint),
+            LayoutPattern.BRICK, start,
+        )
+        rows = {}
+        for c in lay.cells:
+            rows.setdefault(round(c.y), []).append(c)
+        return [sorted(rows[y], key=lambda c: c.x) for y in sorted(rows)[:2]]
+
+    def test_row_covers_the_wall_exactly(self):
+        """Формула центрирования вычитала лишний шов — стена недобирала 2 мм."""
+        for width in (2000, 1800, 2400, 1500):
+            for start in (StartFrom.EDGE, StartFrom.CENTER):
+                for row in self._rows(width, start):
+                    covered = sum(c.w for c in row) + 2 * (len(row) - 1)
+                    assert covered == pytest.approx(width, abs=0.51), (
+                        f"стена {width}, старт {start.value}: покрыто {covered:.0f}"
+                    )
+
+    def test_centred_row_is_symmetric(self):
+        """Артём: «почему слева 197, а справа 199, почему не по 198?»"""
+        for width in (2000, 1800, 2400):
+            row = self._rows(width, StartFrom.CENTER)[0]
+            assert row[0].w == pytest.approx(row[-1].w, abs=0.51), (
+                f"стена {width}: края {row[0].w:.0f} и {row[-1].w:.0f}"
+            )
+
+    def test_staggered_row_edges_match_too(self):
+        """Смещённый ряд тоже симметричен: недостача базового ряда расползалась в края."""
+        for width in (2000, 2400):
+            row = self._rows(width, StartFrom.CENTER)[1]
+            assert row[0].w == pytest.approx(row[-1].w, abs=0.51), (
+                f"стена {width}: края смещённого ряда {row[0].w:.0f} и {row[-1].w:.0f}"
+            )

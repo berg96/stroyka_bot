@@ -109,16 +109,17 @@ def _axis(length_mm: float, step_mm: float, tile_mm: float, start: StartFrom) ->
     # Остаток — это место под подрезку минус шов, который её отделяет.
     cut = max(0.0, remainder - joint_mm)
 
-    if start is StartFrom.CENTER:
+    if start is StartFrom.CENTER and full >= 1:
         # Убираем одну целую плитку и раскидываем освободившееся на две стороны,
         # чтобы подрезка была симметричной. При крошечном остатке (cut почти 0)
         # это как раз спасает от волосяной полоски по краю.
-        if full >= 1 and cut < tile_mm:
-            side = (cut + tile_mm - joint_mm) / 2
-            # На каждый край добавился ещё один шов — он съедает по половине.
-            return Axis(full=full - 1, cut_start_mm=side, cut_end_mm=side, total=full + 1)
-        half = cut / 2
-        return Axis(full=full - 1, cut_start_mm=half, cut_end_mm=half, total=full + 1)
+        #
+        # Ряд из (full-1) целых, двух обрезков и full швов обязан лечь ровно в стену:
+        #   (full-1)·tile + 2·side + full·joint = length
+        # откуда side = (tile + cut)/2. Лишний вычет шва здесь оставлял стену
+        # непокрытой на joint — и края разъезжались на пару миллиметров.
+        side = (cut + tile_mm) / 2
+        return Axis(full=full - 1, cut_start_mm=side, cut_end_mm=side, total=full + 1)
 
     return Axis(full=full, cut_start_mm=0.0, cut_end_mm=cut, total=full + 1)
 
