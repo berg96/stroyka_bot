@@ -609,31 +609,54 @@ class TestEconomyWrap:
         assert not app.said("Эконом сберёг"), "посчитал ленту на диагонали"
 
 
-class TestWebAppButton:
-    """Мини-апп — ещё одна дверь, а не замена меню: FSM остаётся на месте."""
+class TestAppMenuButton:
+    """Мини-апп открывается кнопкой слева от поля ввода (chat menu button).
 
-    def test_button_appears_when_the_app_has_an_address(self):
-        from tilebot.bot.keyboards import main_menu
+    Reply-кнопки снизу нет: initData Telegram передаёт и так, но она дублировала
+    бы вход и путалась с кнопками расчёта. FSM при этом на месте — главное меню не
+    тронуто.
+    """
 
-        menu = main_menu("https://plitka.example/app")
-        titles = [b.text for row in menu.keyboard for b in row]
+    def test_menu_button_points_at_the_app(self):
+        from aiogram.types import MenuButtonWebApp
 
-        assert "📱 Приложение" in titles
-        app_button = next(b for row in menu.keyboard for b in row if b.web_app)
-        assert app_button.web_app.url == "https://plitka.example/app"
-        # Ради мини-аппа ничего не убрали: мастер сравнивает, а не переезжает.
-        assert {"🧱 Плитка", "📐 Площадь", "📋 Мои объекты", "💰 Прайс"} <= set(titles)
+        from tilebot.bot.keyboards import app_menu_button
 
-    def test_without_an_address_there_is_no_button(self):
-        """Пустой адрес Telegram не примет — кнопка уронила бы меню целиком."""
-        from tilebot.bot.keyboards import main_menu
+        btn = app_menu_button("https://plitka.example/app")
+        assert isinstance(btn, MenuButtonWebApp)
+        assert btn.text == "Приложение"
+        assert btn.web_app.url == "https://plitka.example/app"
 
-        titles = [b.text for row in main_menu("").keyboard for b in row]
-        assert "📱 Приложение" not in titles
-        assert "🧱 Плитка" in titles
+    def test_no_url_falls_back_to_the_commands_button(self):
+        """Пустой адрес Telegram не примет — возвращаем дефолтную кнопку команд."""
+        from aiogram.types import MenuButtonCommands
+
+        from tilebot.bot.keyboards import app_menu_button
+
+        assert isinstance(app_menu_button(""), MenuButtonCommands)
 
     def test_plain_http_is_not_offered(self):
-        from tilebot.bot.keyboards import main_menu
+        from aiogram.types import MenuButtonCommands
 
-        titles = [b.text for row in main_menu("http://plitka.example").keyboard for b in row]
+        from tilebot.bot.keyboards import app_menu_button
+
+        assert isinstance(app_menu_button("http://plitka.example"), MenuButtonCommands)
+
+    def test_main_menu_has_no_app_button(self):
+        """Ряд с мини-аппом убран из reply-меню — вход теперь слева."""
+        from tilebot.bot.keyboards import MAIN_MENU
+
+        titles = [b.text for row in MAIN_MENU.keyboard for b in row]
         assert "📱 Приложение" not in titles
+        assert {"🧱 Плитка", "📐 Площадь", "📋 Мои объекты", "💰 Прайс"} <= set(titles)
+
+    async def test_start_installs_the_menu_button_for_the_chat(self, app):
+        """Кнопку слева ставим per-chat на /start: глобальную дефолтную Telegram
+        держит на «commands», web_app туда не встаёт, а per-chat приживается."""
+        from conftest import SASHA
+
+        await app.send("/start")
+
+        sent = [m for m in app.session.sent if type(m).__name__ == "SetChatMenuButton"]
+        assert sent, "на /start кнопку меню не поставили"
+        assert sent[0].chat_id == SASHA

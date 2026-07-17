@@ -21,7 +21,7 @@ from aiogram.types import Message as TgMessage
 from aiogram.types import User as TgUser
 from PIL import Image, ImageDraw
 
-from tilebot.bot.handlers import area, price, projects, tiling
+from tilebot.bot.handlers import area, price, projects, start, tiling
 from tilebot.storage import Storage
 
 SASHA = 383853880
@@ -236,7 +236,7 @@ async def app(storage) -> BotHarness:
     dp = Dispatcher()
     # Роутеры живут в модулях, то есть одни и те же на весь прогон, а Dispatcher
     # у каждого теста свой — отвязываем от прошлого, иначе include_router ругнётся.
-    for router in (tiling.router, area.router, projects.router, price.router):
+    for router in (start.router, tiling.router, area.router, projects.router, price.router):
         router._parent_router = None
         dp.include_router(router)
 

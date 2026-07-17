@@ -34,6 +34,13 @@ HELLO = """<b>Помощник плиточника</b> 🧱
 async def start(message: Message, state: FSMContext, storage: Storage) -> None:
     await state.clear()
     await storage.get_or_create_user(message.from_user.id)
+    # Кнопка мини-аппа слева от поля ввода — ставим per-chat, а не глобально:
+    # глобальную дефолтную кнопку бота Telegram держит на «commands» (её тип задан
+    # в BotFather), и web_app туда не встаёт, а per-chat приживается. Нет
+    # WEBAPP_URL → app_menu_button вернёт кнопку команд, то есть дефолт.
+    await message.bot.set_chat_menu_button(
+        chat_id=message.chat.id, menu_button=kb.app_menu_button()
+    )
     await message.answer(HELLO, reply_markup=kb.MAIN_MENU)
 
 

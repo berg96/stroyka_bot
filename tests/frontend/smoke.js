@@ -194,8 +194,31 @@ const check = (name, cond, extra = '') => {
   byLabel('Прайс').click(); await wait();
   check('прайс открылся', text().includes('Укладка на стену'), text().slice(0, 100));
 
+  console.log('\nОткрыт вне Telegram (пустой initData)');
+  await browserOpenCase();
+
   console.log(`\nОшибок в консоли: ${errors.length}`);
   errors.forEach((e) => console.log('  ⚠️ ' + e));
   console.log(failed ? `\n❌ ПРОВАЛОВ: ${failed}` : '\n✅ ВСЁ ПРОШЛО');
   process.exit(failed || errors.length ? 1 : 0);
 })();
+
+/* Апп открыт ссылкой в браузере: Telegram есть, но initData пустой (именно так
+   выглядел «не удалось опознать»). Должен показать инструкцию, а не биться в 401. */
+async function browserOpenCase() {
+  const d2 = new JSDOM(
+    `<!doctype html><body><div id="app"><div class="loading">Загружаю…</div></div></body>`,
+    {runScripts: 'outside-only', url: 'https://plitka.example/'},
+  );
+  const w = d2.window;
+  w.Telegram = {WebApp: {initData: '', ready() {}, expand() {},
+    BackButton: {show() {}, hide() {}, onClick() {}}}};
+  let hitServer = false;
+  w.fetch = async () => { hitServer = true; return {ok: false, status: 401,
+    json: async () => ({error: 'x'})}; };
+  w.eval(fs.readFileSync(APP, 'utf8'));
+  await new Promise((r) => setTimeout(r, 30));
+  const t = w.document.body.textContent;
+  check('показал «Откройте через бота»', t.includes('Откройте через бота'), t.slice(0, 80));
+  check('в сервер не долбился', !hitServer, 'дёрнул API с пустым initData');
+}

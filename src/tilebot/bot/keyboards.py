@@ -4,6 +4,8 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    MenuButtonCommands,
+    MenuButtonWebApp,
     ReplyKeyboardMarkup,
     WebAppInfo,
 )
@@ -13,31 +15,32 @@ from tilebot.config import get_settings
 from tilebot.core.models import BRICK_OFFSETS, GroutKind, LayoutPattern, StartFrom
 from tilebot.render.scheme import GROUT_COLORS
 
-
-def main_menu(webapp_url: str | None = None) -> ReplyKeyboardMarkup:
-    """Главное меню. Кнопки-«чата» остаются на месте — мини-апп их не заменяет.
-
-    Мини-апп добавляется отдельной строкой и только если он куда-то ведёт:
-    Telegram принимает в WebAppInfo только https, и кнопка с пустым или http
-    адресом уронила бы меню целиком.
-    """
-    rows = [
+MAIN_MENU = ReplyKeyboardMarkup(
+    keyboard=[
         [KeyboardButton(text="🧱 Плитка"), KeyboardButton(text="📐 Площадь")],
         [KeyboardButton(text="📋 Мои объекты"), KeyboardButton(text="💵 Долги")],
         [KeyboardButton(text="💰 Прайс")],
-    ]
+    ],
+    resize_keyboard=True,
+    input_field_placeholder="Выбери, что считаем",
+)
+
+
+def app_menu_button(webapp_url: str | None = None) -> MenuButtonWebApp | MenuButtonCommands:
+    """Кнопка слева от поля ввода (chat menu button).
+
+    Мини-апп открываем именно отсюда, а не reply-кнопкой снизу: это каноничное
+    место «открыть приложение», кнопка всегда на виду, и — главное — Telegram при
+    таком запуске передаёт подписанный initData. Reply-кнопка снизу тоже его
+    передаёт, но зря дублировала бы вход и путалась с кнопками расчёта.
+
+    Пустой или http-URL → возвращаем дефолтную кнопку команд: WebAppInfo примет
+    только https, а класть в меню заведомо битую ссылку нельзя.
+    """
     url = get_settings().webapp_url if webapp_url is None else webapp_url
     if url.startswith("https://"):
-        rows.append([KeyboardButton(text="📱 Приложение", web_app=WebAppInfo(url=url))])
-
-    return ReplyKeyboardMarkup(
-        keyboard=rows,
-        resize_keyboard=True,
-        input_field_placeholder="Выбери, что считаем",
-    )
-
-
-MAIN_MENU = main_menu()
+        return MenuButtonWebApp(text="Приложение", web_app=WebAppInfo(url=url))
+    return MenuButtonCommands()
 
 AREA_SHAPES = InlineKeyboardMarkup(
     inline_keyboard=[
