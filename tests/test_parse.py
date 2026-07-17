@@ -1,7 +1,7 @@
 import pytest
 
 from tilebot.bot.handlers.tiling import _parse_openings
-from tilebot.bot.parse import (
+from tilebot.core.parse import (
     ParseError,
     amount_and_comment,
     dimensions,

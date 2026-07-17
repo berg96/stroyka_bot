@@ -1,0 +1,6 @@
+{
+  "name": "stroyka-frontend-smoke",
+  "private": true,
+  "description": "Прогон экранов мини-аппа в jsdom: node tests/frontend/smoke.js",
+  "dependencies": { "jsdom": "^22" }
+}

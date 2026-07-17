@@ -5,21 +5,39 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
+    WebAppInfo,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from tilebot.config import get_settings
 from tilebot.core.models import BRICK_OFFSETS, GroutKind, LayoutPattern, StartFrom
 from tilebot.render.scheme import GROUT_COLORS
 
-MAIN_MENU = ReplyKeyboardMarkup(
-    keyboard=[
+
+def main_menu(webapp_url: str | None = None) -> ReplyKeyboardMarkup:
+    """Главное меню. Кнопки-«чата» остаются на месте — мини-апп их не заменяет.
+
+    Мини-апп добавляется отдельной строкой и только если он куда-то ведёт:
+    Telegram принимает в WebAppInfo только https, и кнопка с пустым или http
+    адресом уронила бы меню целиком.
+    """
+    rows = [
         [KeyboardButton(text="🧱 Плитка"), KeyboardButton(text="📐 Площадь")],
         [KeyboardButton(text="📋 Мои объекты"), KeyboardButton(text="💵 Долги")],
         [KeyboardButton(text="💰 Прайс")],
-    ],
-    resize_keyboard=True,
-    input_field_placeholder="Выбери, что считаем",
-)
+    ]
+    url = get_settings().webapp_url if webapp_url is None else webapp_url
+    if url.startswith("https://"):
+        rows.append([KeyboardButton(text="📱 Приложение", web_app=WebAppInfo(url=url))])
+
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        input_field_placeholder="Выбери, что считаем",
+    )
+
+
+MAIN_MENU = main_menu()
 
 AREA_SHAPES = InlineKeyboardMarkup(
     inline_keyboard=[

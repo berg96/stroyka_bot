@@ -37,8 +37,9 @@ from tilebot.core.models import (
     SurfaceKind,
     Tile,
 )
+from tilebot.core.parse import ParseError, dimensions, meters
 from tilebot.core.project import ProjectResult, compute_project
-from tilebot.core.room import floor_dims, room_surfaces
+from tilebot.core.room import MAX_HEIGHT_M, MIN_HEIGHT_M, floor_dims, room_surfaces
 from tilebot.core.units import fmt_mm
 from tilebot.core.wrap import supports_wrap
 from tilebot.render.scheme import render_layout
@@ -136,6 +137,35 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
         return out
 
     # --- замеры ---------------------------------------------------------------
+
+    @app.post("/api/measure")
+    async def measure(body: MeasureIn) -> dict:
+        """Разобрать то, что мастер набрал руками: «2 1.8 2 1.8», «60х30», «2,7».
+
+        Тем же парсером, что и бот: Санин ввод — источник реальных граблей
+        («27» вместо 2.7, шов «1,4»), и заводить второй разбор на JS значит
+        завести второй набор этих граблей.
+        """
+        try:
+            if body.kind == "walls":
+                values = meters(body.text)
+                if not 2 <= len(values) <= 12:
+                    raise ParseError("Стен должно быть от 2 до 12.")
+            elif body.kind == "height":
+                (value,) = meters(body.text, count=1)
+                if not MIN_HEIGHT_M <= value <= MAX_HEIGHT_M:
+                    raise ParseError(
+                        f"Высота {value:.2f} м — это точно так? Похоже, единицы перепутаны. "
+                        "Напиши в метрах (2.7) или в миллиметрах (2700)."
+                    )
+                values = [value]
+            elif body.kind == "tile":
+                values = dimensions(body.text, count=2)
+            else:  # size — стена или пол: ширина и высота
+                values = [v / 1000 for v in dimensions(body.text, count=2)]
+        except ParseError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        return {"values": values}
 
     @app.post("/api/projects/{project_id}/room", status_code=201)
     async def add_room(project_id: int, body: RoomIn, user: User) -> dict:
@@ -617,6 +647,13 @@ class PatchIn(BaseModel):
     rotate: bool = False
     tile_size: TileSizeIn | None = None
     tile_price: float | None = Field(default=None, ge=0)
+
+
+class MeasureIn(BaseModel):
+    """Сырой ввод мастера — разбирает его сервер, тем же парсером, что у бота."""
+
+    kind: str = Field(pattern="^(walls|height|tile|size)$")
+    text: str = Field(min_length=1, max_length=200)
 
 
 class MasterIn(BaseModel):

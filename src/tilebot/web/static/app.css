@@ -1,0 +1,200 @@
+/* Цвета берём у клиента Telegram: мини-апп должен выглядеть частью мессенджера,
+   а не чужой веб-страницей. У Сани телефон на дневной теме, но угадывать не надо. */
+:root {
+  --bg: var(--tg-theme-bg-color, #fff);
+  --text: var(--tg-theme-text-color, #000);
+  --hint: var(--tg-theme-hint-color, #707579);
+  --link: var(--tg-theme-link-color, #2481cc);
+  --button: var(--tg-theme-button-color, #2481cc);
+  --button-text: var(--tg-theme-button-text-color, #fff);
+  --card: var(--tg-theme-secondary-bg-color, #f4f4f5);
+  --danger: #d64545;
+  --ok: #2e9e5b;
+  --radius: 12px;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+body {
+  margin: 0;
+  padding: 0 0 96px;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.loading, .empty { padding: 48px 16px; text-align: center; color: var(--hint); }
+
+.screen { padding: 12px 16px; }
+
+h1 { font-size: 20px; margin: 4px 0 12px; }
+h2 { font-size: 17px; margin: 20px 0 8px; }
+p  { margin: 6px 0; }
+
+.hint { color: var(--hint); font-size: 14px; }
+.muted { color: var(--hint); }
+
+/* --- карточки и списки --- */
+
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.row + .row { margin-top: 8px; }
+
+.project {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.project-title { font-weight: 600; }
+
+.badge {
+  font-size: 13px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--bg);
+  color: var(--hint);
+  white-space: nowrap;
+}
+.badge.due { color: var(--danger); }
+.badge.paid { color: var(--ok); }
+
+/* --- кнопки --- */
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn {
+  display: block;
+  width: 100%;
+  padding: 13px 16px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--button);
+  color: var(--button-text);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.btn.secondary { background: var(--card); color: var(--text); font-weight: 500; }
+.btn.danger { background: transparent; color: var(--danger); font-weight: 500; }
+.btn:disabled { opacity: .5; }
+
+/* Правки посчитанного: сетка кнопок — их много, и все короткие. */
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 12px 0;
+}
+.actions .btn { margin: 0; font-size: 15px; padding: 12px 8px; }
+.actions .btn.wide { grid-column: 1 / -1; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 14px; }
+.chip {
+  padding: 9px 14px;
+  border: 1px solid transparent;
+  border-radius: 99px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 15px;
+}
+.chip.on {
+  background: var(--button);
+  color: var(--button-text);
+  font-weight: 600;
+}
+
+/* --- поля --- */
+
+label { display: block; margin: 12px 0 4px; font-size: 14px; color: var(--hint); }
+
+input[type=text], input[type=number], input[type=tel] {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+}
+input:focus { outline: none; border-color: var(--button); }
+
+.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.switch { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
+.switch input { width: 22px; height: 22px; accent-color: var(--button); }
+
+/* --- результат --- */
+
+.summary-head { font-size: 18px; font-weight: 600; margin-bottom: 2px; }
+
+.scheme {
+  width: 100%;
+  border-radius: var(--radius);
+  background: var(--card);
+  display: block;
+  margin-bottom: 8px;
+}
+
+.scheme-nav { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; }
+.scheme-nav .chip { flex: 0 0 auto; }
+
+.buy li { margin: 4px 0; }
+.buy .note { color: var(--hint); font-size: 13px; }
+
+.advice {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 4px 0;
+  font-size: 14px;
+}
+
+.savings {
+  background: rgba(46, 158, 91, .12);
+  color: var(--ok);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 10px 0;
+  font-weight: 600;
+}
+
+/* --- бумаги --- */
+
+.paper-line { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
+.paper-line .qty { color: var(--hint); font-size: 14px; }
+.paper-total {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid var(--hint);
+  margin-top: 10px;
+  padding-top: 10px;
+  font-weight: 700;
+  font-size: 17px;
+}
+
+.error {
+  background: rgba(214, 69, 69, .12);
+  color: var(--danger);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 10px 0;
+}

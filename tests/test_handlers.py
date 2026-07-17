@@ -607,3 +607,33 @@ class TestEconomyWrap:
 
         assert app.said("Под 45° так не выйдет"), f"нет объяснения: {app.texts}"
         assert not app.said("Эконом сберёг"), "посчитал ленту на диагонали"
+
+
+class TestWebAppButton:
+    """Мини-апп — ещё одна дверь, а не замена меню: FSM остаётся на месте."""
+
+    def test_button_appears_when_the_app_has_an_address(self):
+        from tilebot.bot.keyboards import main_menu
+
+        menu = main_menu("https://plitka.example/app")
+        titles = [b.text for row in menu.keyboard for b in row]
+
+        assert "📱 Приложение" in titles
+        app_button = next(b for row in menu.keyboard for b in row if b.web_app)
+        assert app_button.web_app.url == "https://plitka.example/app"
+        # Ради мини-аппа ничего не убрали: мастер сравнивает, а не переезжает.
+        assert {"🧱 Плитка", "📐 Площадь", "📋 Мои объекты", "💰 Прайс"} <= set(titles)
+
+    def test_without_an_address_there_is_no_button(self):
+        """Пустой адрес Telegram не примет — кнопка уронила бы меню целиком."""
+        from tilebot.bot.keyboards import main_menu
+
+        titles = [b.text for row in main_menu("").keyboard for b in row]
+        assert "📱 Приложение" not in titles
+        assert "🧱 Плитка" in titles
+
+    def test_plain_http_is_not_offered(self):
+        from tilebot.bot.keyboards import main_menu
+
+        titles = [b.text for row in main_menu("http://plitka.example").keyboard for b in row]
+        assert "📱 Приложение" not in titles

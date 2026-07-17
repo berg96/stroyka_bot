@@ -7,8 +7,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from tilebot.bot import keyboards as kb
-from tilebot.bot.parse import ParseError, single_number
 from tilebot.core.estimate import money
+from tilebot.core.parse import ParseError, single_number
 from tilebot.storage import Storage
 
 router = Router(name="price")

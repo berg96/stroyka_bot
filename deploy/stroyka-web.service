@@ -1,0 +1,16 @@
+[Unit]
+Description=Stroyka miniapp — веб-версия помощника плиточника
+Wants=network-online.target
+After=network-online.target
+# Бот и мини-апп смотрят в одну sqlite: пусть база и таблицы будут раньше.
+After=stroyka-bot.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/stroyka-bot
+ExecStart=/root/.local/bin/uv run python -m tilebot.web
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

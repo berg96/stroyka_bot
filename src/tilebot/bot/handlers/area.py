@@ -11,7 +11,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from tilebot.bot import keyboards as kb
-from tilebot.bot.parse import ParseError, meters, name_and_numbers
 from tilebot.core.geometry import (
     AreaResult,
     GeometryError,
@@ -23,6 +22,7 @@ from tilebot.core.geometry import (
     right_angled_quad,
     triangle,
 )
+from tilebot.core.parse import ParseError, meters, name_and_numbers
 from tilebot.render.shape import render_parts, render_shape
 
 router = Router(name="area")

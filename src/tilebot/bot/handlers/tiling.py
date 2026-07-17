@@ -18,15 +18,6 @@ from PIL import Image
 from PIL.Image import Image as PilImage
 
 from tilebot.bot import keyboards as kb
-from tilebot.bot.parse import (
-    ParseError,
-    dimensions,
-    meters,
-    name_and_numbers,
-    numbers,
-    single_number,
-    to_mm,
-)
 from tilebot.core.estimate import money
 from tilebot.core.layout import Layout
 from tilebot.core.models import (
@@ -41,8 +32,17 @@ from tilebot.core.models import (
     SurfaceKind,
     Tile,
 )
+from tilebot.core.parse import (
+    ParseError,
+    dimensions,
+    meters,
+    name_and_numbers,
+    numbers,
+    single_number,
+    to_mm,
+)
 from tilebot.core.project import ProjectResult, Savings, compute_project
-from tilebot.core.room import floor_dims, room_surfaces
+from tilebot.core.room import MAX_HEIGHT_M, MIN_HEIGHT_M, floor_dims, room_surfaces
 from tilebot.core.units import fmt_mm, plural
 from tilebot.core.wrap import supports_wrap
 from tilebot.render.scheme import render_layout
@@ -136,10 +136,6 @@ async def got_room_walls(message: Message, state: FSMContext) -> None:
 
 # Высота, при которой замер точно перепутан с единицами: «270» — это 2,7 м в
 # сантиметрах, а по общему правилу вышло бы 27 см. Молча считать такое нельзя.
-MIN_HEIGHT_M = 1.0
-MAX_HEIGHT_M = 6.0
-
-
 @router.message(Tiling.room_height)
 async def got_room_height(message: Message, state: FSMContext) -> None:
     try:
