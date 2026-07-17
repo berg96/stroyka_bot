@@ -13,9 +13,8 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from tilebot.bot import keyboards as kb
 from tilebot.bot.handlers.tiling import Tiling
 from tilebot.core.estimate import build_estimate, format_act, format_estimate, money
-from tilebot.core.layout import Layout, build_layout
-from tilebot.core.materials import Materials, calc_materials, merge_materials
 from tilebot.core.models import GroutKind
+from tilebot.core.project import ProjectResult, compute_project
 from tilebot.render.pdf import render_estimate_pdf
 from tilebot.render.scheme import render_layout
 from tilebot.storage import Project, Storage, payload_to_surface
@@ -28,29 +27,21 @@ logger = logging.getLogger(__name__)
 NOT_YOURS = "Объект не найден."
 
 
-def _rebuild(project: Project) -> tuple[list[Layout], list[Materials], bool, GroutKind]:
-    """Пересобрать раскладки объекта из сохранённых замеров."""
-    layouts: list[Layout] = []
-    materials: list[Materials] = []
-    waterproofing = False
-    grout_kind = GroutKind.CEMENT
+def _rebuild(project: Project) -> tuple[ProjectResult, bool, GroutKind]:
+    """Пересчитать объект из сохранённых замеров — тем же счётом, что и схемы.
 
-    for row in project.surfaces:
-        saved = payload_to_surface(row.dump())
-        layout = build_layout(saved.surface, saved.tile, saved.pattern, saved.start_from)
-        layouts.append(layout)
-        materials.append(
-            calc_materials(
-                layout,
-                waterproofing=saved.waterproofing,
-                waste=saved.waste,
-                grout_kind=saved.grout_kind,
-            )
-        )
-        waterproofing = waterproofing or saved.waterproofing
-        grout_kind = saved.grout_kind
-
-    return layouts, materials, waterproofing, grout_kind
+    Считает ядро, а не этот модуль. Раньше здесь был свой, более бедный расчёт
+    (голый `build_layout`), и смета молча расходилась со схемой: эконом-лента,
+    общая ориентация стен и смещение рядов до документа не доезжали — на ванной
+    Сани схема обещала 39 плиток, а смета заказчику требовала 44.
+    """
+    saved_all = [payload_to_surface(row.dump()) for row in project.surfaces]
+    result = compute_project(saved_all)
+    return (
+        result,
+        any(s.waterproofing for s in saved_all),
+        saved_all[-1].grout_kind,
+    )
 
 
 @router.message(F.text == "📋 Мои объекты")
@@ -103,12 +94,11 @@ async def summary(call: CallbackQuery, storage: Storage) -> None:
         await call.message.answer("В объекте пока нет поверхностей.")
         return
 
-    layouts, materials, _, _ = _rebuild(project)
-    total_area = sum(lay.surface.net_area_m2 for lay in layouts)
-    total_tiles = sum(m.tiles_count for m in materials)
+    result, _, _ = _rebuild(project)
+    total_tiles = sum(m.tiles_count for m in result.materials)
 
     lines = [f"<b>{project.title}</b> — итог по объекту", ""]
-    for lay in layouts:
+    for lay in result.layouts:
         lines.append(
             f"• {lay.surface.name}: {lay.surface.net_area_m2:.2f} м², "
             f"плитка {lay.tile.width_mm:.0f}×{lay.tile.height_mm:.0f}, {lay.tiles_grid} шт"
@@ -116,21 +106,16 @@ async def summary(call: CallbackQuery, storage: Storage) -> None:
 
     lines += [
         "",
-        f"<b>Всего площадь: {total_area:.2f} м²</b>",
+        f"<b>Всего площадь: {result.area_m2:.2f} м²</b>",
         f"Плитки с запасом: {total_tiles} шт",
         "",
         "<b>Купить на объект:</b>",
     ]
-    for line in merge_materials(materials):
+    for line in result.purchase:
         note = f" <i>({line.note})</i>" if line.note else ""
         lines.append(f"• {line.name}: <b>{line.format_qty()} {line.unit}</b>{note}")
 
-    tile_cost = sum(
-        m.tile_area_with_waste_m2 * lay.tile.price_per_m2
-        for lay, m in zip(layouts, materials, strict=True)
-        if lay.tile.price_per_m2
-    )
-    if tile_cost:
+    if (tile_cost := result.tile_cost) is not None:
         lines += ["", f"Плитка обойдётся в <b>{money(tile_cost)}</b>"]
 
     await call.message.answer("\n".join(lines), reply_markup=kb.project_actions(project_id))
@@ -149,12 +134,12 @@ async def estimate(call: CallbackQuery, storage: Storage, state: FSMContext) -> 
         return
 
     user = await storage.get_or_create_user(call.from_user.id)
-    layouts, materials, waterproofing, grout_kind = _rebuild(project)
+    result, waterproofing, grout_kind = _rebuild(project)
 
     est = build_estimate(
         project.title,
-        layouts,
-        materials,
+        result.layouts,
+        result.materials,
         user.price,
         waterproofing=waterproofing,
         grout_kind=grout_kind,
@@ -167,7 +152,7 @@ async def estimate(call: CallbackQuery, storage: Storage, state: FSMContext) -> 
         est,
         master_name=user.name,
         master_phone=user.phone,
-        schemes=[render_layout(lay) for lay in layouts],
+        schemes=[render_layout(lay) for lay in result.layouts],
     )
     safe_title = "".join(c for c in project.title if c.isalnum() or c in " -_")[:40].strip()
     await call.message.answer_document(
@@ -207,11 +192,11 @@ async def show_act(message: Message, user_id: int, storage: Storage, project_id:
         return
 
     user = await storage.get_or_create_user(user_id)
-    layouts, materials, waterproofing, grout_kind = _rebuild(project)
+    result, waterproofing, grout_kind = _rebuild(project)
     est = build_estimate(
         project.title,
-        layouts,
-        materials,
+        result.layouts,
+        result.materials,
         user.price,
         waterproofing=waterproofing,
         grout_kind=grout_kind,

@@ -547,6 +547,29 @@ class TestEconomyWrap:
 
         assert after < before, f"плитки {before} → {after}: эконом не сэкономил"
 
+    async def test_economy_reaches_the_papers_the_customer_gets(self, app):
+        """Смета и итог обязаны считать ТУ ЖЕ раскладку, что мастер видит на схеме.
+
+        Здесь у бота был свой, более бедный расчёт для документов: эконом-лента до
+        сметы не доезжала, и схема обещала 39 плиток, пока смета заказчику требовала
+        44. Мастер отдаёт заказчику бумагу, которая спорит с его же схемой.
+        """
+        await _room_flow(app)
+        await app.click("Эконом: по кругу")
+        on_scheme = _tile_qty(app.last_text)
+
+        app.forget()
+        await app.click("Итог по объекту")
+        assert _tile_qty(app.last_text) == on_scheme, (
+            f"итог по объекту считает не то, что схема: {on_scheme} на схеме"
+        )
+
+        app.forget()
+        await app.click("Смета заказчику")
+        assert _tile_qty_anywhere(app.texts) == on_scheme, (
+            f"смета заказчику считает не то, что схема: {on_scheme} на схеме"
+        )
+
     async def test_switching_back_restores_the_normal_layout(self, app):
         """Кнопка-обманка — худшее: обещали вернуть обычную, значит вернули."""
         await _room_flow(app)
@@ -609,7 +632,19 @@ class TestEconomyWrap:
 
 
 def _tile_qty(text: str) -> int:
-    """Сколько плитки бот велел купить — из строки «• Плитка 600×300: 44 шт»."""
-    m = re.search(r"Плитка \d+×\d+: <b>(\d+) шт", text)
+    """Сколько плитки бот велел купить — из строки «• Плитка 600×300: 44 шт».
+
+    Сводка выделяет количество жирным, а смета печатает его голым и с упаковками —
+    строка одна и та же, оформление разное.
+    """
+    m = re.search(r"Плитка \d+×\d+: (?:<b>)?(\d+) шт", text)
     assert m, f"в сводке нет строки плитки:\n{text}"
     return int(m.group(1))
+
+
+def _tile_qty_anywhere(texts: list[str]) -> int:
+    """То же, но по всему, что бот наговорил: за сметой следом летит подпись к PDF."""
+    for text in reversed(texts):
+        if re.search(r"Плитка \d+×\d+: (?:<b>)?\d+ шт", text):
+            return _tile_qty(text)
+    raise AssertionError(f"строки плитки нет ни в одном сообщении:\n{texts}")

@@ -134,3 +134,26 @@ class Surface:
     def net_area_m2(self) -> float:
         """Площадь под плитку — за вычетом проёмов, но не меньше нуля."""
         return max(0.0, self.gross_area_m2 - self.openings_area_m2)
+
+
+@dataclass(frozen=True)
+class SavedSurface:
+    """Поверхность со всеми решениями мастера — всё, чтобы пересчитать её заново.
+
+    Живёт в ядре, а не в хранилище: по ней считают и бот, и miniapp, а база — лишь
+    один из способов её донести (см. `storage.payload_to_surface`).
+    """
+
+    surface: Surface
+    tile: Tile
+    pattern: LayoutPattern
+    start_from: StartFrom
+    waterproofing: bool
+    waste: float | None = None  # None — берём норму под раскладку
+    # Фото плитки: для ядра — непрозрачная ссылка, картинку достаёт тот, кто рисует.
+    tile_photo_id: str | None = None
+    grout: str | None = None
+    tile_locked: bool = False
+    grout_kind: GroutKind = GroutKind.CEMENT
+    offset_ratio: float = DEFAULT_OFFSET
+    wrap: bool = False  # эконом: стены одной лентой по периметру

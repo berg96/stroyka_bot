@@ -9,7 +9,6 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -33,6 +32,7 @@ from tilebot.core.models import (
     GroutKind,
     LayoutPattern,
     Opening,
+    SavedSurface,
     StartFrom,
     Surface,
     SurfaceKind,
@@ -210,24 +210,6 @@ def surface_to_payload(
         },
         ensure_ascii=False,
     )
-
-
-@dataclass(frozen=True)
-class SavedSurface:
-    """Поверхность, поднятая из базы — всё, что нужно, чтобы пересчитать её заново."""
-
-    surface: Surface
-    tile: Tile
-    pattern: LayoutPattern
-    start_from: StartFrom
-    waterproofing: bool
-    waste: float | None = None  # None — берём норму под раскладку
-    tile_photo_id: str | None = None
-    grout: str | None = None
-    tile_locked: bool = False
-    grout_kind: GroutKind = GroutKind.CEMENT
-    offset_ratio: float = DEFAULT_OFFSET
-    wrap: bool = False  # эконом: стены одной лентой по периметру
 
 
 def payload_to_surface(data: dict) -> SavedSurface:
