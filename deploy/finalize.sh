@@ -1,40 +1,41 @@
 #!/usr/bin/env bash
-# Довести мини-апп до рабочего https на duckdns-поддомене — одним прогоном.
+# Довести мини-апп до рабочего https — одним прогоном.
 #
-#   ./finalize_duckdns.sh <поддомен> <duckdns-токен>
-#   например: ./finalize_duckdns.sh plitka-bot 46e...abc
+#   ./finalize.sh <домен> [duckdns-токен]
+#   ./finalize.sh plitka.mooo.com                 # afraid.org: A-запись уже стоит
+#   ./finalize.sh plitka-bot.duckdns.org <токен>  # duckdns: IP выставит скрипт
 #
 # Что делает (всё идемпотентно, любой сбой — стоп, живой конфиг вслепую не трогаем):
-#   1) выставляет A-запись поддомена на наш IP (duckdns при создании пишет IP
-#      ТВОЕГО браузера, а не сервера — без этого шага домен ведёт не сюда);
-#   2) ждёт, пока DNS реально начнёт резолвиться в наш IP;
-#   3) выпускает сертификат Let's Encrypt (webroot);
-#   4) ставит nginx: :80 (редирект) + :8443 TLS → uvicorn :8110;
-#   5) добавляет поддомен в SNI-роутер :443 (с бэкапом nginx.conf);
-#   6) прописывает WEBAPP_URL в .env, поднимает сервис, рестартует бота — кнопка
-#      «📱 Приложение» оживает;
-#   7) складывает токен в .env, чтобы IP можно было освежать (сервер статичный,
-#      но пусть будет).
+#   0) если дали duckdns-токен — выставляет A-запись на наш IP (duckdns при
+#      создании пишет IP браузера, не сервера);
+#   1) ждёт, пока DNS реально начнёт резолвиться в наш IP;
+#   2) выпускает сертификат Let's Encrypt (webroot);
+#   3) ставит nginx: :80 (редирект) + :8443 TLS → uvicorn :8110;
+#   4) добавляет домен в SNI-роутер :443 (с бэкапом nginx.conf);
+#   5) прописывает WEBAPP_URL в .env, поднимает сервис, рестартует бота — кнопка
+#      «📱 Приложение» оживает.
 set -euo pipefail
 
-SUB="${1:?нужен поддомен, напр. plitka-bot}"
-TOKEN="${2:?нужен duckdns-токен}"
-DOMAIN="${SUB}.duckdns.org"
+DOMAIN="${1:?нужен домен, напр. plitka.mooo.com}"
+TOKEN="${2:-}"
 IP=82.26.193.24
 BACKEND=127.0.0.1:8443
 PORT=8110
 REPO=/root/stroyka-bot
 EMAIL=chigar2010@gmail.com
 
-echo "== duckdns: ставлю A-запись $DOMAIN → $IP =="
-resp=$(curl -sS "https://www.duckdns.org/update?domains=${SUB}&token=${TOKEN}&ip=${IP}")
-[ "$resp" = "OK" ] || { echo "duckdns ответил '$resp' (не OK). Проверь имя поддомена и токен."; exit 1; }
+if [ -n "$TOKEN" ]; then
+  SUB="${DOMAIN%%.duckdns.org}"
+  echo "== duckdns: ставлю A-запись $DOMAIN → $IP =="
+  resp=$(curl -sS "https://www.duckdns.org/update?domains=${SUB}&token=${TOKEN}&ip=${IP}")
+  [ "$resp" = "OK" ] || { echo "duckdns ответил '$resp' (не OK). Проверь имя и токен."; exit 1; }
+fi
 
 echo "== жду, пока DNS начнёт резолвиться сюда =="
 for i in $(seq 1 30); do
   got=$(dig +short "$DOMAIN" @1.1.1.1 | tail -1)
   [ "$got" = "$IP" ] && { echo "  резолвится: $DOMAIN → $IP"; break; }
-  echo "  ещё нет (вижу '$got'), жду 10с… [$i/30]"; sleep 10
+  echo "  ещё нет (вижу '${got:-пусто}'), жду 10с… [$i/30]"; sleep 10
 done
 [ "$(dig +short "$DOMAIN" @1.1.1.1 | tail -1)" = "$IP" ] || { echo "DNS так и не поднялся."; exit 1; }
 
@@ -87,14 +88,13 @@ if ! grep -q "${DOMAIN} .*${BACKEND}" /etc/nginx/nginx.conf; then
 fi
 nginx -t && systemctl reload nginx
 
-echo "== .env: WEBAPP_URL + токен duckdns =="
+echo "== .env: WEBAPP_URL =="
 touch "$REPO/.env"
 sed -i '/^WEBAPP_URL=/d;/^DUCKDNS_DOMAIN=/d;/^DUCKDNS_TOKEN=/d' "$REPO/.env"
-{
-  echo "WEBAPP_URL=https://${DOMAIN}"
-  echo "DUCKDNS_DOMAIN=${SUB}"
-  echo "DUCKDNS_TOKEN=${TOKEN}"
-} >> "$REPO/.env"
+echo "WEBAPP_URL=https://${DOMAIN}" >> "$REPO/.env"
+if [ -n "$TOKEN" ]; then
+  { echo "DUCKDNS_DOMAIN=${SUB}"; echo "DUCKDNS_TOKEN=${TOKEN}"; } >> "$REPO/.env"
+fi
 
 echo "== сервис мини-аппа =="
 cp "$REPO/deploy/stroyka-web.service" /etc/systemd/system/
