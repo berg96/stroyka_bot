@@ -7,6 +7,7 @@ FSM-переход, callback_data, не та клавиатура. Гонять 
 """
 
 import io
+import re
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import Any
@@ -245,3 +246,50 @@ async def app(storage) -> BotHarness:
         return await handler(event, data)
 
     return BotHarness(bot, dp, session)
+
+
+# --- сценарии и разбор ответов, общие для тестов бота и мини-аппа ---------
+
+
+async def _room_flow(app, *, floor_tile: str | None = "60 60") -> None:
+    """Ванная целиком: 4 стены 60×30, на полу свой керамогранит 60×60."""
+    await app.send("🧱 Плитка")
+    await app.click("Комната целиком")
+    await app.send("Ванная, Борзова")
+    await app.send("2 1.8 2 1.8")
+    await app.send("2.7")
+    await app.click("Да, и пол")
+    await app.send("60 30")
+    await app.send("1,4")
+    await app.click("9 мм")
+    await app.send("8")  # штук в упаковке
+
+    if floor_tile:
+        await app.send(floor_tile)  # плитка на пол — своя
+        await app.send("4")  # штук в упаковке напольной
+    else:
+        await app.click("Такая же, как на стены")
+
+    await app.click("Вразбежку")
+    await app.click("Как лучше")
+    await app.click("7%")
+    await app.click("Да, мокрая зона")
+
+
+def _tile_qty(text: str) -> int:
+    """Сколько плитки бот велел купить — из строки «• Плитка 600×300: 44 шт».
+
+    Сводка выделяет количество жирным, а смета печатает его голым и с упаковками —
+    строка одна и та же, оформление разное.
+    """
+    m = re.search(r"Плитка \d+×\d+: (?:<b>)?(\d+) шт", text)
+    assert m, f"в сводке нет строки плитки:\n{text}"
+    return int(m.group(1))
+
+
+def _tile_qty_anywhere(texts: list[str]) -> int:
+    """То же, но по всему, что бот наговорил: за сметой следом летит подпись к PDF."""
+    for text in reversed(texts):
+        if re.search(r"Плитка \d+×\d+: (?:<b>)?\d+ шт", text):
+            return _tile_qty(text)
+    raise AssertionError(f"строки плитки нет ни в одном сообщении:\n{texts}")

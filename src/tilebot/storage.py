@@ -434,7 +434,9 @@ class Storage:
             result = await s.execute(
                 select(Project)
                 .where(Project.user_id == tg_id)
-                .order_by(Project.created_at.desc())
+                # id вторым ключом: created_at в sqlite с точностью до секунды, и
+                # два объекта, заведённых подряд, иначе встают в случайном порядке.
+                .order_by(Project.created_at.desc(), Project.id.desc())
                 .limit(limit)
                 .options(*self._LOADED)
             )
