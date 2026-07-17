@@ -4,66 +4,58 @@
 базе. Не выложили — бот работает как работал, просто в меню нет кнопки
 «📱 Приложение».
 
-## Что нужно один раз
+Адрес — на **duckdns** (afraid.org капчит создание поддоменов и был недоступен).
 
-1. **Поддомен.** По образцу остальных на UK — FreeDNS (afraid.org), запись A на
-   `82.26.193.24`. Дальше по тексту `plitka.mooo.com` — заменить на выбранный.
+## Шаг вручную (1 минута)
 
-2. **SNI-демукс.** В `/etc/nginx/nginx.conf`, в `map $ssl_preread_server_name
-   $backend_443`, рядом с остальными:
+1. Зайти на https://www.duckdns.org — вход через GitHub/Google, паролей заводить
+   не надо.
+2. В поле **sub domain** вписать имя (напр. `plitka-bot`) → **add domain**.
+   Какой IP там подставился — неважно, скрипт всё равно перезапишет на наш.
+3. Скопировать **token** (вверху страницы) — длинная строка.
 
-   ```
-   plitka.mooo.com  127.0.0.1:8443;
-   ```
+## Остальное — одним прогоном
 
-3. **Конфиги nginx и сертификат:**
+На UK (`82.26.193.24`):
 
-   ```bash
-   cp deploy/stroyka-http.conf  /etc/nginx/conf.d/
-   nginx -t && systemctl reload nginx
-   certbot certonly --webroot -w /var/www/html -d plitka.mooo.com
-   cp deploy/stroyka-https.conf /etc/nginx/conf.d/
-   nginx -t && systemctl reload nginx
-   ```
+```bash
+cd /root/stroyka-bot
+./deploy/finalize_duckdns.sh <поддомен> <токен>
+# например: ./deploy/finalize_duckdns.sh plitka-bot 46e1b2c3-...
+```
 
-   Порядок важен: `stroyka-https.conf` ссылается на сертификат, которого до
-   certbot ещё нет, и nginx с ним не стартует.
+Скрипт (идемпотентный, любой сбой — стоп):
 
-4. **Адрес — в `.env`**, иначе кнопки в боте не будет (Telegram принимает в
-   WebAppInfo только https, и кнопку с пустым адресом он не проглотит):
+1. ставит A-запись `<поддомен>.duckdns.org` → `82.26.193.24` по токену
+   (duckdns при создании пишет IP браузера, а не сервера — без этого ведёт мимо);
+2. ждёт, пока DNS реально начнёт резолвиться сюда;
+3. выпускает сертификат Let's Encrypt (webroot);
+4. ставит nginx: `:80` редирект + `:8443` TLS → uvicorn `:8110`;
+5. добавляет поддомен в SNI-роутер `:443` (с бэкапом `nginx.conf`);
+6. пишет `WEBAPP_URL` в `.env`, поднимает `stroyka-web`, рестартует бота —
+   кнопка «📱 Приложение» оживает;
+7. складывает токен в `.env` (сервер статичный, но пусть IP можно освежать).
 
-   ```
-   WEBAPP_URL=https://plitka.mooo.com
-   ```
+В конце сам проверит: `GET /` → 200, `GET /api/projects` без подписи → 401.
 
-5. **Сервис:**
-
-   ```bash
-   cp deploy/stroyka-web.service /etc/systemd/system/
-   systemctl daemon-reload
-   systemctl enable --now stroyka-web
-   systemctl restart stroyka-bot   # чтобы бот перечитал WEBAPP_URL
-   ```
-
-   `enable`, а не только `start`: без него после ребута сервис не поднимется —
-   на этом уже обжигались с ботом.
-
-## Проверить
+## Проверить руками
 
 ```bash
 systemctl status stroyka-web --no-pager
-curl -s -o /dev/null -w '%{http_code}\n' https://plitka.mooo.com/        # 200
-curl -s https://plitka.mooo.com/api/projects                             # 401 — так и надо
+curl -s -o /dev/null -w '%{http_code}\n' https://<поддомен>.duckdns.org/         # 200
+curl -s https://<поддомен>.duckdns.org/api/projects                              # 401 — так и надо
 ```
 
-`401` без initData — это правильно: мини-апп пускает только по подписи Telegram.
+`401` без initData — правильно: мини-апп пускает только по подписи Telegram.
 
 ## Откатить
 
 ```bash
 systemctl disable --now stroyka-web
-rm /etc/nginx/conf.d/stroyka-{http,https}.conf && nginx -t && systemctl reload nginx
+rm /etc/nginx/conf.d/stroyka-{http,https}.conf
+# убрать строку поддомена из map $ssl_preread_server_name в /etc/nginx/nginx.conf
+nginx -t && systemctl reload nginx
+sed -i '/^WEBAPP_URL=/d' /root/stroyka-bot/.env && systemctl restart stroyka-bot
 ```
 
-Плюс убрать `WEBAPP_URL` из `.env` и перезапустить бота — кнопка исчезнет.
-Данные при этом целы: мини-апп ничего своего не хранит, всё в той же базе бота.
+Кнопка исчезнет, данные целы: мини-апп своего не хранит, всё в той же базе бота.
