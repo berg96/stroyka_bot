@@ -324,3 +324,22 @@ input:focus { outline: none; border-color: var(--accent); }
 .viewer .dl { background: var(--accent); color: #fff; }
 .viewer .dl .ic { stroke: #fff; }
 .viewer .close { background: rgba(255, 255, 255, .16); color: #fff; }
+
+/* быстрый ввод — один экран + тонкая настройка */
+.field input.bad { border-color: var(--danger); }
+.field .err { display: block; }
+.field .help { display: block; }
+.tuning-head {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r);
+  padding: 14px; margin-top: 18px; color: inherit; font: inherit;
+}
+.tuning-head:active { background: var(--surface-2); }
+.tuning-head .grow { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.tuning-head .sum { color: var(--hint); font-size: 13px; margin-top: 2px; }
+.tuning-head .ic { color: var(--hint); }
+.tuning-body {
+  border: 1px solid var(--border); border-top: 0;
+  border-radius: 0 0 var(--r) var(--r); padding: 2px 12px 8px; background: var(--surface);
+}
+.tuning-body .field:first-child { margin-top: 8px; }

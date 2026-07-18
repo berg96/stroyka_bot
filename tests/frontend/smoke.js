@@ -116,26 +116,45 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   await wait(20);
   check('вьюер закрывается', !w.document.querySelector('.viewer'));
 
-  console.log('\nСоздание объекта (баг вложенного run в save)');
+  console.log('\nСоздание объекта — один экран, «Посчитать»');
   const c2 = makeApp();
   await wait();
   byText(c2.w, '.btn', 'Новый объект').click();
   await wait(50);
-  const type = (val) => { c2.w.document.querySelector('input').value = val; };
-  const nextBtn = () => byText(c2.w, '.btn', 'Дальше');
-  type('Ванная тест'); nextBtn().click(); await wait(50);
-  check('спросил режим', c2.w.document.body.textContent.includes('Что считаем'));
-  byText(c2.w, '.btn', 'Комната целиком').click(); await wait(50);
-  type('2 1.8 2 1.8'); nextBtn().click(); await wait(80);
-  check('спросил высоту', c2.w.document.body.textContent.includes('Высота'));
-  type('2.7'); nextBtn().click(); await wait(80);
-  byText(c2.w, '.btn', 'Да, и пол').click(); await wait(50);
-  check('спросил плитку', c2.w.document.body.textContent.includes('Плитка'));
-  type('60 30'); nextBtn().click(); await wait(120);
+  check('быстрый ввод — один экран', c2.w.document.body.textContent.includes('Название объекта') &&
+    c2.w.document.body.textContent.includes('Стены по кругу') && !!byText(c2.w, '.btn', 'Посчитать'),
+    'ожидал одну форму с полями и «Посчитать»');
+  check('тонкая настройка свёрнута с итогом', c2.w.document.body.textContent.includes('проставлено'));
+  // заполняем поля по порядку: название, стены, высота, плитка
+  const inputs = () => [...c2.w.document.querySelectorAll('#form input')];
+  const setIn = (i, val) => { const el = inputs()[i]; el.value = val; el.dispatchEvent(new c2.w.Event('input')); };
+  setIn(0, 'Ванная тест'); setIn(1, '2 1.8 2 1.8'); setIn(2, '2.7'); setIn(3, '60 30');
+  byText(c2.w, '.btn', 'Посчитать').click();
+  await wait(150);
   check('объект СОЗДАН (POST /room)', c2.calls.some((c) => /\/room$/.test(c.url) && c.m === 'POST'),
-    'нажал плитку — а объект не создался (вложенный run проглотил save)');
+    'нажал «Посчитать» — объект не создался');
   check('перешёл на холст', c2.w.document.body.textContent.includes('на объект'), c2.w.document.body.textContent.slice(0, 120));
-  check('размер «60 30» ушёл как 600×300', c2.calls.some((c) => /\/measure$/.test(c.url) && c.body?.text === '60 30'));
+  check('размер «60 30» ушёл в measure', c2.calls.some((c) => /\/measure$/.test(c.url) && c.body?.text === '60 30'));
+
+  console.log('\nВалидация под полем (не общей плашкой)');
+  const c3 = makeApp();
+  // сервер вернёт 422 на высоту «270»
+  const origFetch = c3.w.fetch;
+  c3.w.fetch = async (url, o = {}) => {
+    if (/\/measure$/.test(url) && JSON.parse(o.body).kind === 'height') {
+      const val = JSON.parse(o.body).text;
+      if (parseFloat(val) > 20) return {ok: false, status: 422, json: async () => ({error: 'Похоже, единицы перепутаны — напиши 2.7 или 2700'})};
+    }
+    return origFetch(url, o);
+  };
+  await wait();
+  byText(c3.w, '.btn', 'Новый объект').click(); await wait(50);
+  const setIn3 = (i, val) => { const el = [...c3.w.document.querySelectorAll('#form input')][i]; el.value = val; el.dispatchEvent(new c3.w.Event('input')); };
+  setIn3(0, 'Тест'); setIn3(1, '2 1.8 2 1.8'); setIn3(2, '270'); setIn3(3, '60 30');
+  byText(c3.w, '.btn', 'Посчитать').click(); await wait(120);
+  check('ошибка высоты показана под полем', !!byText(c3.w, '.field .err', 'единицы перепутаны'),
+    'ждал .field .err с текстом');
+  check('объект НЕ создан при ошибке', !c3.calls.some((c) => /\/room$/.test(c.url)));
 
   console.log('\nВне Telegram (пустой initData)');
   const out = makeApp({initData: ''});

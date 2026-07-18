@@ -509,50 +509,131 @@ function screenPrice() {
 
 // --- экран: быстрый ввод -----------------------------------------------------
 
+const PATTERN_RU = {straight: 'шов в шов', brick: 'вразбежку', diagonal: 'диагональ', herringbone: 'ёлочка'};
+
+/** Быстрый ввод — ОДИН экран (как в макете), а не 12 шагов. Тонкая настройка
+ * свёрнута и уже проставлена. Валидация — под полем, не общей плашкой. */
 function screenCreate() {
   const d = state.draft;
-  const steps = {
-    title: () => ask('Название объекта', 'Ванная, Борзова', 'text', (v) => { if (!v.trim()) throw new Error('Напиши название.'); d.title = v.trim(); d.step = 'mode'; }),
-    mode: () => choose('Что считаем?', [['Комната целиком', () => { d.mode = 'room'; d.step = 'walls'; }], ['Одна поверхность', () => { d.mode = 'single'; d.step = 'kind'; }]]),
-    walls: () => ask('Стены по кругу, м', '2 1.8 2 1.8', 'text', async (v) => { d.walls = (await measure('walls', v)).values; d.step = 'height'; }, 'по часовой, через пробел — как мерил'),
-    height: () => ask('Высота, м', '2.7', 'text', async (v) => { d.height = (await measure('height', v)).values[0]; d.step = d.walls.length === 4 ? 'floor' : 'tile'; if (d.step === 'tile') d.with_floor = false; }),
-    floor: () => choose('Пол тоже плиткой?', [['Да, и пол', () => { d.with_floor = true; d.step = 'tile'; }], ['Только стены', () => { d.with_floor = false; d.step = 'tile'; }]]),
-    kind: () => choose('Что меряем?', [['Стена', () => { d.kind = 'wall'; d.step = 'size'; }], ['Пол', () => { d.kind = 'floor'; d.step = 'size'; }]]),
-    size: () => ask('Ширина и высота, м', '2 2.7', 'text', async (v) => { const [w, hh] = (await measure('size', v)).values; d.width_m = w; d.height_m = hh; d.step = 'tile'; }),
-    tile: () => ask('Плитка, см', '60 30', 'text', async (v) => { const [w, hh] = (await measure('tile', v)).values; d.tile = {width_mm: w, height_mm: hh, joint_mm: 2, thickness_mm: 9}; d.pattern = 'straight'; d.start_from = 'auto'; d.waste = 0.07; await save(); }, 'можно в см (60 30) или мм (600 300). Шов, раскладку и запас докрутишь на холсте.'),
+  d.mode = d.mode || 'room';
+  d.kind = d.kind || 'wall';
+  d.errors = d.errors || {};
+  d.adv = d.adv || false;
+  d.tuning = d.tuning || {
+    with_floor: false, joint_mm: 2, thickness_mm: 9, per_pack: null,
+    pattern: 'straight', start_from: 'auto', waste: 7, waterproofing: false,
   };
-  // Без своего run(): save() зовётся ИЗ ask() (внутри run()), вложенный run()
-  // увидел бы busy и молча вышел — объект бы не создался, а поле «сбросилось».
-  async function save() {
-    const pr = await api('/api/projects', {method: 'POST', body: {title: d.title}});
-    const common = {tile: d.tile, pattern: d.pattern, start_from: d.start_from, waste: d.waste, waterproofing: false};
-    if (d.mode === 'room') await api(`/api/projects/${pr.id}/room`, {method: 'POST', body: {...common, walls_m: d.walls, height_m: d.height, with_floor: !!d.with_floor}});
-    else await api(`/api/projects/${pr.id}/surface`, {method: 'POST', body: {...common, kind: d.kind, width_m: d.width_m, height_m: d.height_m}});
-    state.draft = null; state.project = await api(`/api/projects/${pr.id}`); state.surface = 0; state.lastSchemeUrl = null; state.screen = 'canvas';
+
+  const box = h(`<div class="screen">
+    <div class="top"><button class="icon-btn" id="back">${icon('back')}</button><h1>Новый объект</h1></div>
+    <div id="form"></div>
+    <div class="dock"><button class="btn" id="calc">Посчитать</button></div>
+  </div>`);
+  const form = box.querySelector('#form');
+
+  const field = (label, key, ph, help, numeric = true) => {
+    const f = h(`<label class="field"><span class="lab">${esc(label)}</span>
+      <input type="text" ${numeric ? 'inputmode="decimal"' : ''} class="${d.errors[key] ? 'bad' : ''}" placeholder="${esc(ph)}" value="${esc(d[key] || '')}">
+      ${help ? `<span class="help">${esc(help)}</span>` : ''}
+      ${d.errors[key] ? `<span class="err">${esc(d.errors[key])}</span>` : ''}</label>`).firstElementChild;
+    const inp = f.querySelector('input');
+    inp.oninput = () => { d[key] = inp.value; };
+    form.append(f);
+  };
+
+  field('Название объекта', 'title', 'Ванная, Борзова', '', false);
+
+  form.append(h(`<div style="height:14px"></div>`));
+  form.append(seg([['Комната целиком', 'room'], ['Одна поверхность', 'single']], d.mode,
+    (v) => { d.mode = v; render(); }));
+
+  if (d.mode === 'room') {
+    field('Стены по кругу, м', 'wallsText', '2 1.8 2 1.8', 'по часовой, через пробел — как мерил');
+    field('Высота, м', 'heightText', '2.7');
+  } else {
+    blockRow(form, 'grid', 'Что меряем', seg([['Стена', 'wall'], ['Пол', 'floor']], d.kind,
+      (v) => { d.kind = v; render(); }));
+    field('Размер, м', 'sizeText', '2 2.7', 'ширина и высота');
   }
-  return steps[d.step]();
-}
+  field('Плитка, см', 'tileText', '60 30', 'можно в см (60 30) или мм (600 300)');
 
-function ask(title, ph, type, onNext, hint = '') {
-  const box = h(`<div class="screen"><div class="top"><button class="icon-btn" id="back">${icon('back')}</button><h1>${esc(title)}</h1></div>
-    ${hint ? `<p class="hint">${esc(hint)}</p>` : ''}
-    <input type="${type === 'number' ? 'number' : 'text'}" inputmode="${type === 'number' ? 'numeric' : 'text'}" placeholder="${esc(ph)}" style="margin-top:10px">
-    <div class="dock"><button class="btn" id="next">Дальше</button></div></div>`);
-  const input = box.querySelector('input');
-  const submit = () => run(async () => { await onNext(input.value); });
-  box.querySelector('#next').onclick = submit;
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
-  setTimeout(() => input.focus(), 40);
+  buildTuning(form, d);
+
+  box.querySelector('#calc').onclick = () => run(() => createProject(d));
   box.querySelector('#back').onclick = () => { state.draft = null; loadList(); };
   return box;
 }
 
-function choose(title, opts) {
-  const box = h(`<div class="screen"><div class="top"><button class="icon-btn" id="back">${icon('back')}</button><h1>${esc(title)}</h1></div><div class="list" id="o"></div></div>`);
-  const o = box.querySelector('#o');
-  opts.forEach(([l, fn]) => { const b = h(`<button class="btn secondary">${esc(l)}</button>`); b.querySelector('button').onclick = () => run(async () => { await fn(); }); o.append(b); });
-  box.querySelector('#back').onclick = () => { state.draft = null; loadList(); };
-  return box;
+/** «Тонкая настройка» — свёрнута с итогом-строкой, разворачивается. */
+function buildTuning(el, d) {
+  const tn = d.tuning;
+  const sum = `шов ${fmtNum(tn.joint_mm)} мм · ${PATTERN_RU[tn.pattern]} · запас ${tn.waste}%`;
+  const head = h(`<button class="tuning-head">${icon('grid', 'ic')}
+    <span class="grow"><span>Тонкая настройка</span><span class="sum">${esc(sum)} — проставлено</span></span>
+    ${icon(d.adv ? 'minus' : 'plus', 'ic')}</button>`).firstElementChild;
+  head.onclick = () => { d.adv = !d.adv; render(); };
+  el.append(head);
+  if (!d.adv) return;
+
+  const b = h(`<div class="tuning-body"></div>`).firstElementChild;
+  const redraw = () => render();
+  if (d.mode === 'room') toggleRow(b, 'grid', 'Пол своей плиткой', tn.with_floor, () => { tn.with_floor = !tn.with_floor; redraw(); });
+  valueRow(b, 'grid', 'Шов', {value: tn.joint_mm, fmt: (v) => `${fmtNum(v)} мм`, min: 0.5, max: 10, step: 0.5, onSet: (v) => { tn.joint_mm = v; redraw(); }});
+  valueRow(b, 'box', 'Толщина плитки', {value: tn.thickness_mm, fmt: (v) => `${fmtNum(v)} мм`, min: 3, max: 30, step: 1, onSet: (v) => { tn.thickness_mm = v; redraw(); }});
+  // штук в упаковке — пусто = не знаю, считаю штуками
+  const pack = h(`<label class="field"><span class="lab">Штук в упаковке</span>
+    <input type="text" inputmode="numeric" placeholder="не знаю — посчитаю штуками" value="${tn.per_pack || ''}"></label>`).firstElementChild;
+  pack.querySelector('input').oninput = (e) => { const n = parseInt(e.target.value, 10); tn.per_pack = Number.isFinite(n) && n > 0 ? n : null; };
+  b.append(pack);
+  blockRow(b, 'layers', 'Раскладка', seg(PATTERNS, tn.pattern, (v) => { tn.pattern = v; redraw(); }));
+  blockRow(b, 'ruler', 'Начало ряда', seg([['От угла', 'edge'], ['От центра', 'center'], ['Реши сам', 'auto']], tn.start_from, (v) => { tn.start_from = v; redraw(); }));
+  valueRow(b, 'package', 'Запас', {value: tn.waste, fmt: (v) => `${Math.round(v)}%`, min: 0, max: 30, step: 1, onSet: (v) => { tn.waste = v; redraw(); }});
+  toggleRow(b, 'droplet', 'Гидроизоляция', tn.waterproofing, () => { tn.waterproofing = !tn.waterproofing; redraw(); });
+  el.append(b);
+}
+
+/** Разобрать поле сервером; ошибку — в d.errors[key], вернуть null. */
+async function parseField(text, kind, key, d) {
+  try { return (await measure(kind, text || '')).values; }
+  catch (e) { d.errors[key] = e.message; return null; }
+}
+
+async function createProject(d) {
+  d.errors = {};
+  if (!(d.title || '').trim()) { d.errors.title = 'Напиши название объекта.'; render(); return; }
+
+  let walls, height, size;
+  const tile = await parseField(d.tileText, 'tile', 'tileText', d);
+  if (d.mode === 'room') {
+    walls = await parseField(d.wallsText, 'walls', 'wallsText', d);
+    height = await parseField(d.heightText, 'height', 'heightText', d);
+  } else {
+    size = await parseField(d.sizeText, 'size', 'sizeText', d);
+  }
+  if (Object.keys(d.errors).length) { render(); return; }
+
+  const tn = d.tuning;
+  const common = {
+    tile: {width_mm: tile[0], height_mm: tile[1], joint_mm: tn.joint_mm, thickness_mm: tn.thickness_mm, per_pack: tn.per_pack},
+    pattern: tn.pattern, start_from: tn.start_from, waste: tn.waste / 100, waterproofing: tn.waterproofing,
+  };
+  const pr = await api('/api/projects', {method: 'POST', body: {title: d.title.trim()}});
+  try {
+    if (d.mode === 'room') {
+      await api(`/api/projects/${pr.id}/room`, {method: 'POST', body: {...common, walls_m: walls, height_m: height[0], with_floor: !!tn.with_floor}});
+    } else {
+      await api(`/api/projects/${pr.id}/surface`, {method: 'POST', body: {...common, kind: d.kind, width_m: size[0], height_m: size[1]}});
+    }
+  } catch (e) {
+    // напр. кривая комната + пол → 422; покажем у поля стен, объект-пустышку удалим
+    await api(`/api/projects/${pr.id}`, {method: 'DELETE'}).catch(() => {});
+    d.errors[d.mode === 'room' ? 'wallsText' : 'sizeText'] = e.message;
+    render();
+    return;
+  }
+  state.draft = null;
+  state.project = await api(`/api/projects/${pr.id}`);
+  state.surface = 0; state.lastSchemeUrl = null; state.screen = 'canvas';
 }
 
 // --- сборка ------------------------------------------------------------------
