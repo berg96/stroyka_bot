@@ -22,6 +22,20 @@ const baseResult = () => ({
   advice: ['Раскладка ровная'], savings: null,
 });
 const PROJECT = {id: 1, title: 'Ванная, Борзова', surfaces: 5, photos: 0, deal_amount: 50000, paid: 20000, due: 30000, payments: [], result: baseResult()};
+const OBJECT = () => ({
+  id: 1, title: 'Ванная, Борзова', surfaces: 5, photos: 0, deal_amount: 50000, paid: 20000, due: 30000, payments: [],
+  measures: {walls: [2, 1.8, 2, 1.8], height_m: 2.7, floor_m2: 2.9},
+  works: [{id: 'tile', kind: 'tile', name: 'Плитка', input: {}, hero_value: '23,4 м²', hero_note: '156 плиток', work_sum: 34710}],
+  total: 34710,
+});
+const laminateWork = (underlay = true) => ({
+  id: 10, kind: 'laminate', name: 'Ламинат', input: {pack_m2: 2.1, waste: 0.05, underlay},
+  hero_value: '2,9 м²', hero_note: '2 пачек', work_sum: 1764,
+  work_lines: [{name: 'Укладка ламината', qty: 2.9, unit: 'м²', total: 1764, total_text: '1 764 ₽'}],
+  materials: underlay
+    ? [{name: 'Ламинат', qty_text: '2', unit: 'пачек', note: ''}, {name: 'Подложка', qty_text: '2,9', unit: 'м²', note: ''}]
+    : [{name: 'Ламинат', qty_text: '2', unit: 'пачек', note: ''}],
+});
 
 function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
   const calls = [];
@@ -51,6 +65,11 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
     if (/\/title$/.test(url)) return {ok: true, status: 200, json: async () => ({...PROJECT, title: body.title})};
     if (/\/api\/me$/.test(url)) return {ok: true, status: 200, json: async () => ({id: 1, name: '', phone: '', price: {wall_tiling: 1200, floor_tiling: 1000, cutting: 60, grouting: 200, grouting_epoxy: 450, waterproofing: 400, priming: 100, demolition: 500, min_order: 0}})};
     if (/\/api\/price$/.test(url)) return {ok: true, status: 200, json: async () => body};
+    if (/\/api\/objects\/1$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => OBJECT()};
+    if (/\/api\/objects\/1\/works$/.test(url) && m === 'POST') return {ok: true, status: 201, json: async () => laminateWork()};
+    if (/\/api\/objects\/1\/works\/10$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => laminateWork()};
+    if (/\/api\/objects\/1\/works\/10$/.test(url) && m === 'PATCH') return {ok: true, status: 200, json: async () => laminateWork(body.input.underlay !== false)};
+    if (/\/api\/objects\/1\/works\/10$/.test(url) && m === 'DELETE') return {ok: true, status: 200, json: async () => ({ok: true})};
     if (/\/api\/projects$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => [PROJECT]};
     if (/\/api\/projects\/1$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => PROJECT};
     if (/\/api\/projects\/1$/.test(url) && m === 'PATCH') {
@@ -78,13 +97,18 @@ const check = (name, cond, extra = '') => {
 const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => e.textContent.includes(t));
 
 (async () => {
-  console.log('Портфель → холст');
+  console.log('Портфель → хаб объекта → холст плитки');
   const {w, calls, errs} = makeApp();
   await wait();
   check('список рисуется', w.document.body.textContent.includes('Ванная, Борзова'));
   byText(w, '.tile-row', 'Ванная').click();
   await wait(80);
   const t = () => w.document.body.textContent;
+  check('хаб: раздел «Работы» и замеры', t().includes('Работы') && t().includes('Замеры'));
+  check('хаб: плитка в списке работ', !!byText(w, '.tile-row', 'Плитка'));
+  check('хаб: «Добавить работу» есть', !!byText(w, '.btn', 'Добавить работу'));
+  byText(w, '.tile-row', 'Плитка').click();
+  await wait(80);
   check('холст: число плиток', t().includes('145'));
   check('холст: схема запрошена', calls.some((c) => /scheme\/0\.png/.test(c.url)));
   check('спека: раскладка есть', !!byText(w, '.seg button', 'Диагональ'));
@@ -139,8 +163,28 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   await wait(150);
   check('объект СОЗДАН (POST /room)', c2.calls.some((c) => /\/room$/.test(c.url) && c.m === 'POST'),
     'нажал «Посчитать» — объект не создался');
-  check('перешёл на холст', c2.w.document.body.textContent.includes('на объект'), c2.w.document.body.textContent.slice(0, 120));
+  check('перешёл на хаб объекта', c2.w.document.body.textContent.includes('Работы') && c2.calls.some((c) => /\/api\/objects\/1$/.test(c.url)), c2.w.document.body.textContent.slice(0, 120));
   check('размер «60 30» ушёл в measure', c2.calls.some((c) => /\/measure$/.test(c.url) && c.body?.text === '60 30'));
+
+  console.log('\nВиды работ: добавить ламинат, живой пересчёт, удалить');
+  const cw = makeApp();
+  await wait();
+  byText(cw.w, '.tile-row', 'Ванная').click(); await wait(80);
+  byText(cw.w, '.btn', 'Добавить работу').click(); await wait(50);
+  check('выбор вида: 6 карточек', cw.w.document.querySelectorAll('#types .tile-row').length === 6);
+  byText(cw.w, '.tile-row', 'Ламинат').click(); await wait(120);
+  check('экран вида: ламинат создан (POST works)', cw.calls.some((c) => /\/works$/.test(c.url) && c.m === 'POST'));
+  check('экран вида: работа и результат', cw.w.document.body.textContent.includes('Ламинат') && cw.w.document.body.textContent.includes('1 764'));
+  check('ввод: схема укладки есть', !!byText(cw.w, '.seg button', 'Ёлочка'));
+  check('ввод: подложка-тумблер есть', !!byText(cw.w, '.spec-row', 'Подложка'));
+  // выключить подложку → PATCH и пересчёт
+  byText(cw.w, '.spec-row', 'Подложка').querySelector('.toggle').click();
+  await wait(200);
+  check('тумблер шлёт PATCH input', cw.calls.some((c) => /\/works\/10$/.test(c.url) && c.m === 'PATCH'));
+  // удалить работу
+  cw.w.confirm = () => true;
+  cw.w.document.querySelector('#del').click(); await wait(120);
+  check('работа удалена (DELETE) → вернулись на хаб', cw.calls.some((c) => /\/works\/10$/.test(c.url) && c.m === 'DELETE') && cw.w.document.body.textContent.includes('Работы'));
 
   console.log('\nВалидация под полем (не общей плашкой)');
   const c3 = makeApp();

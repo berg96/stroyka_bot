@@ -420,6 +420,15 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
     async def get_object(project_id: int, user: User) -> dict:
         return await _object_json(await owned(project_id, user), user)
 
+    @app.get("/api/objects/{project_id}/works/{work_id}")
+    async def get_work_detail(project_id: int, work_id: int, user: User) -> dict:
+        work = await store.get_work(work_id, user)
+        if work is None or work.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Работа не найдена.")
+        project = await owned(project_id, user)
+        return _work_detail(work, await _object_measures(project),
+                            (await store.get_or_create_user(user)).price)
+
     @app.post("/api/objects/{project_id}/works", status_code=201)
     async def add_work(project_id: int, body: WorkCreateIn, user: User) -> dict:
         project = await owned(project_id, user)

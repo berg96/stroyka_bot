@@ -165,7 +165,7 @@ function screenList() {
           <span class="sub">${p.surfaces} ${plural(p.surfaces, 'поверхность', 'поверхности', 'поверхностей')}</span></span>
         ${money_}${icon('chevron', 'ic chev')}
       </button>`);
-    card.querySelector('button').onclick = () => openProject(p.id);
+    card.querySelector('button').onclick = () => openObject(p.id);
     list.append(card);
   }
   box.querySelector('#new').onclick = () => { state.draft = {step: 'title', title: '', mode: null}; go('create'); };
@@ -173,12 +173,243 @@ function screenList() {
   return box;
 }
 
-const openProject = (id) => run(async () => {
-  state.project = await api(`/api/projects/${id}`);
+/** Объект = замеры + список работ (плитка + другие виды). */
+const openObject = (id) => run(async () => {
+  state.object = await api(`/api/objects/${id}`);
+  state.screen = 'object';
+});
+
+const reloadObject = async () => { state.object = await api(`/api/objects/${state.object.id}`); };
+
+/** Плитка — одна из работ; открываем её богатый холст (существующий экран). */
+const openTile = () => run(async () => {
+  state.project = await api(`/api/projects/${state.object.id}`);
   state.surface = 0;
   state.lastSchemeUrl = null;
   state.screen = state.project.result ? 'canvas' : 'canvas';
 });
+
+const backToObject = () => (state.object ? go('object') : loadList());
+
+// --- экран: объект с работами (хаб 4.1) --------------------------------------
+
+const WORK_TYPES = [
+  ['tile', 'Плитка', 'grid', 'схема, рез, закупка'],
+  ['plaster', 'Штукатурка', 'box', 'площадь + смесь'],
+  ['laminate', 'Ламинат', 'layers', 'пачки + подложка'],
+  ['baseboard', 'Плинтус', 'ruler', 'планки + уголки'],
+  ['reveals', 'Откосы', 'door', 'по проёмам'],
+  ['plumbing', 'Сантехника', 'droplet', 'список точек'],
+];
+const WORK_ICON = Object.fromEntries(WORK_TYPES.map(([k, , i]) => [k, i]));
+
+function screenObject() {
+  const o = state.object;
+  const m = o.measures || {};
+  const mSum = m.walls && m.walls.length
+    ? `стены ${m.walls.map(fmtNum).join('·')} · h ${fmtNum(m.height_m || 0)}${m.floor_m2 ? ` · пол ${fmtNum(m.floor_m2)} м²` : ''}`
+    : 'замеры не заданы';
+  const box = h(`<div class="screen">
+    <div class="top"><button class="icon-btn" id="back">${icon('back')}</button>
+      <h1 id="title" title="Переименовать">${esc(o.title)}</h1></div>
+    <div class="card"><div class="row"><span class="muted">Замеры комнаты</span>
+      <span class="hint">переиспользуются</span></div>
+      <div class="hint" style="margin-top:6px">${esc(mSum)}</div></div>
+    <h2>Работы</h2>
+    <div class="list" id="works"></div>
+    <button class="btn secondary" id="addwork" style="margin-top:10px">${icon('plus', 'ic')} Добавить работу</button>
+    <div class="dock" style="display:flex;flex-direction:column;gap:10px">
+      <div class="result" style="margin:0"><div class="big"><span class="n">${money(o.total || 0)}</span>
+        <span class="u">всего по работам</span></div></div>
+      <div class="btn-row">
+        <button class="btn secondary" id="money">${icon('wallet', 'ic')} Деньги</button>
+        <button class="btn secondary" id="price">${icon('wallet', 'ic')} Прайс</button>
+      </div>
+    </div></div>`);
+  const works = box.querySelector('#works');
+  if (!o.works.length) {
+    works.append(h(`<div class="hint" style="padding:4px 2px">Добавь первую работу — плитка, штукатурка, ламинат, сантехника… соберём всё в одну смету.</div>`));
+  }
+  o.works.forEach((w) => {
+    const card = h(`<button class="tile-row">${icon(WORK_ICON[w.kind] || 'box', 'ic')}
+      <span class="grow"><span class="title">${esc(w.name)}</span>
+        <span class="sub">${esc(w.hero_value)}${w.hero_note ? ' · ' + esc(w.hero_note) : ''}</span></span>
+      <span class="pill">${money(w.work_sum)}</span>${icon('chevron', 'ic chev')}</button>`);
+    card.querySelector('button').onclick = () => (w.kind === 'tile' ? openTile() : openWork(w));
+    works.append(card);
+  });
+  const titleEl = box.querySelector('#title');
+  titleEl.onclick = () => editTitle(titleEl, o);
+  box.querySelector('#back').onclick = () => loadList();
+  box.querySelector('#addwork').onclick = () => go('addwork');
+  box.querySelector('#money').onclick = () => run(async () => { state.project = await api(`/api/projects/${o.id}`); state.screen = 'money'; });
+  box.querySelector('#price').onclick = () => run(async () => { state.price = (await api('/api/me')).price; state.screen = 'price'; });
+  return box;
+}
+
+// --- экран: добавить работу (4.2) --------------------------------------------
+
+function screenAddWork() {
+  const o = state.object;
+  const has = new Set(o.works.map((w) => w.kind));
+  const box = h(`<div class="screen">
+    <div class="top"><button class="icon-btn" id="back">${icon('back')}</button><h1>Какая работа?</h1></div>
+    <div class="list" id="types"></div></div>`);
+  const types = box.querySelector('#types');
+  WORK_TYPES.forEach(([kind, name, ic, sub]) => {
+    const exists = kind === 'tile' && has.has('tile');
+    const card = h(`<button class="tile-row">${icon(ic, 'ic-lg ic')}
+      <span class="grow"><span class="title">${esc(name)}</span>
+        <span class="sub">${esc(exists ? 'уже добавлена — открыть' : sub)}</span></span>
+      ${icon('chevron', 'ic chev')}</button>`);
+    card.querySelector('button').onclick = () => {
+      if (kind === 'tile') { has.has('tile') ? openTile() : tg?.showAlert?.('Плитка добавляется при создании объекта (замеры комнаты).'); return; }
+      addWork(kind);
+    };
+    types.append(card);
+  });
+  box.querySelector('#back').onclick = () => go('object');
+  return box;
+}
+
+const addWork = (kind) => run(async () => {
+  state.work = await api(`/api/objects/${state.object.id}/works`, {method: 'POST', body: {kind}});
+  await reloadObject();
+  state.screen = 'work';
+});
+
+const openWork = (w) => run(async () => {
+  state.work = await api(`/api/objects/${state.object.id}/works/${w.id}`);
+  state.screen = 'work';
+});
+
+// --- экран: вид работ (герой 4.3) --------------------------------------------
+
+let wTimer = null;
+let wVer = 0;
+let wPending = {};
+
+function workPatch(input) {
+  Object.assign(wPending, input);
+  tg?.HapticFeedback?.impactOccurred('light');
+  root.querySelectorAll('.js-wnum').forEach((n) => n.classList.add('computing-dim'));
+  clearTimeout(wTimer);
+  wTimer = setTimeout(fireWorkPatch, 120);
+}
+
+async function fireWorkPatch() {
+  const input = wPending; wPending = {};
+  const v = ++wVer;
+  try {
+    const w = await api(`/api/objects/${state.object.id}/works/${state.work.id}`, {method: 'PATCH', body: {input}});
+    if (v !== wVer) return;
+    state.work = w; render(); tg?.HapticFeedback?.notificationOccurred('success');
+  } catch (e) { if (v !== wVer) return; fail(e); }
+}
+
+function screenWork() {
+  const o = state.object;
+  const w = state.work;
+  const box = h(`<div class="screen">
+    <div class="top"><button class="icon-btn" id="back">${icon('back')}</button>
+      <h1>${esc(w.name)}</h1>
+      <button class="icon-btn" id="del" aria-label="Удалить">${icon('trash')}</button></div>
+    <p class="hint">${esc(o.title)} · из замеров комнаты</p>
+    <div class="tabs" id="tabs"></div>
+    <h2>Ввод · правится на месте</h2>
+    <div class="spec" id="input"></div>
+    <div class="result" style="margin-top:16px">
+      <div class="big"><span class="n js-wnum">${money(w.work_sum)}</span><span class="u">работа</span></div>
+      <div class="meta js-wnum">${esc(w.hero_value)}${w.hero_note ? ' · ' + esc(w.hero_note) : ''}</div>
+    </div>
+    <h2>В смету пойдёт</h2>
+    <div class="card buy" id="lines"></div>
+    <div class="dock"><button class="btn" id="save">Готово</button></div></div>`);
+
+  // табы всех работ объекта
+  const tabs = box.querySelector('#tabs');
+  o.works.forEach((ow) => {
+    const b = h(`<button class="tab ${ow.id === w.id ? 'on' : ''}">${esc(ow.name)}</button>`);
+    b.querySelector('button').onclick = () => (ow.id === w.id ? null : ow.kind === 'tile' ? openTile() : openWork(ow));
+    tabs.append(b);
+  });
+
+  workInput(box.querySelector('#input'), w);
+
+  const lines = box.querySelector('#lines');
+  w.work_lines.forEach((ln) => lines.append(h(`<div class="line"><div class="grow">${esc(ln.name)}</div><div class="q num js-wnum">${esc(ln.total_text)}</div></div>`)));
+  w.materials.forEach((m) => lines.append(h(`<div class="line"><div class="grow"><div>${esc(m.name)}</div>${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}</div><div class="q num">${esc(m.qty_text)} ${esc(m.unit)}</div></div>`)));
+
+  box.querySelector('#back').onclick = () => run(async () => { await reloadObject(); state.screen = 'object'; });
+  box.querySelector('#save').onclick = () => run(async () => { await reloadObject(); state.screen = 'object'; });
+  box.querySelector('#del').onclick = () => {
+    const ok = () => run(async () => { await api(`/api/objects/${o.id}/works/${w.id}`, {method: 'DELETE'}); await reloadObject(); state.screen = 'object'; });
+    if (tg?.showConfirm) tg.showConfirm(`Удалить работу «${w.name}»?`, (yes) => yes && ok());
+    else if (confirm(`Удалить «${w.name}»?`)) ok();
+  };
+  return box;
+}
+
+/** Панель ввода вида работ — контролы шлют workPatch, результат пересчитывается. */
+function workInput(el, w) {
+  const i = w.input || {};
+  if (w.kind === 'plaster') {
+    valueRow(el, 'box', 'Слои', {value: i.layers ?? 1, fmt: (v) => String(Math.round(v)), min: 1, max: 3, step: 1, onSet: (v) => workPatch({layers: Math.round(v)})});
+    valueRow(el, 'droplet', 'Расход смеси', {value: i.kg_per_m2 ?? 1.2, fmt: (v) => `${fmtNum(v)} кг/м²`, min: 0.5, max: 15, step: 0.5, onSet: (v) => workPatch({kg_per_m2: v})});
+  } else if (w.kind === 'laminate') {
+    valueRow(el, 'box', 'Пачка', {value: i.pack_m2 ?? 2.1, fmt: (v) => `${fmtNum(v)} м²`, min: 0.5, max: 5, step: 0.1, onSet: (v) => workPatch({pack_m2: v})});
+    blockRow(el, 'layers', 'Схема укладки', seg([['Прямая', '0.05'], ['Диагональ', '0.12'], ['Ёлочка', '0.15']], String(i.waste ?? 0.05), (v) => workPatch({waste: parseFloat(v)})));
+    toggleRow(el, 'grid', 'Подложка', i.underlay !== false, () => workPatch({underlay: !(i.underlay !== false)}));
+  } else if (w.kind === 'baseboard') {
+    valueRow(el, 'ruler', 'Длина планки', {value: i.plank_m ?? 2.5, fmt: (v) => `${fmtNum(v)} м`, min: 1, max: 4, step: 0.1, onSet: (v) => workPatch({plank_m: v})});
+    valueRow(el, 'door', 'Вычесть проёмы', {value: i.deduct_m ?? 0, fmt: (v) => `${fmtNum(v)} м`, min: 0, max: 20, step: 0.1, onSet: (v) => workPatch({deduct_m: v})});
+    valueRow(el, 'grid', 'Углов', {value: i.corners ?? 4, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({corners: Math.round(v)})});
+  } else if (w.kind === 'reveals') {
+    valueRow(el, 'ruler', 'Ширина откоса', {value: i.reveal_width_cm ?? 25, fmt: (v) => `${fmtNum(v)} см`, min: 5, max: 60, step: 1, onSet: (v) => workPatch({reveal_width_cm: v})});
+    revealsOpenings(el, i.openings || []);
+  } else if (w.kind === 'plumbing') {
+    plumbingPoints(el, i.points || []);
+  }
+}
+
+function revealsOpenings(el, openings) {
+  el.append(h(`<div class="spec-lab" style="margin-top:8px">${icon('door', 'ic')}<span>Проёмы</span></div>`));
+  openings.forEach((o, idx) => {
+    const row = h(`<div class="spec-row"><span class="lab">${esc(o.name || 'Проём')}</span>
+      <span class="stepper"><span class="cur">${fmtNum(o.width_m || 0)}×${fmtNum(o.height_m || 0)} м</span>
+      <button class="minus" aria-label="убрать">×</button></span></div>`).firstElementChild;
+    row.querySelector('.cur').onclick = () => {
+      const v = prompt('Проём — ширина и высота, м (напр. 1.2 1.4):', `${o.width_m || ''} ${o.height_m || ''}`.trim());
+      if (v == null) return;
+      const [ww, hh] = v.replace(',', '.').split(/\s+/).map(parseFloat);
+      const next = openings.slice(); next[idx] = {...o, width_m: ww || 0, height_m: hh || 0};
+      workPatch({openings: next});
+    };
+    row.querySelector('.minus').onclick = () => workPatch({openings: openings.filter((_, j) => j !== idx)});
+    el.append(row);
+  });
+  const add = h(`<button class="btn secondary" style="margin-top:8px">${icon('plus', 'ic')} Добавить проём</button>`);
+  add.querySelector('button').onclick = () => workPatch({openings: [...openings, {name: 'Проём', width_m: 1.2, height_m: 1.4}]});
+  el.append(add);
+}
+
+function plumbingPoints(el, points) {
+  points.forEach((p, idx) => {
+    const row = h(`<div class="spec-row">
+      <button class="toggle ${p.on ? 'on' : ''}"></button>
+      <span class="lab">${esc(p.name)}</span>
+      <input class="cur-input" inputmode="numeric" value="${p.price}" style="width:84px">
+    </div>`).firstElementChild;
+    row.querySelector('.toggle').onclick = () => {
+      const next = points.slice(); next[idx] = {...p, on: !p.on}; workPatch({points: next});
+    };
+    row.querySelector('input').onchange = (e) => {
+      const n = parseFloat(e.target.value) || 0;
+      const next = points.slice(); next[idx] = {...p, price: n}; workPatch({points: next});
+    };
+    el.append(row);
+  });
+}
 
 // --- экран: холст объекта (герой) --------------------------------------------
 
@@ -194,7 +425,7 @@ function screenCanvas() {
       <button class="icon-btn" id="back">${icon('back')}</button><h1>${esc(p.title)}</h1></div>
       <div class="center">${icon('box')}<h1>Ещё нет поверхностей</h1>
       <p class="hint">Добавь стену или пол — сразу посчитаю раскладку и закупку.</p></div></div>`);
-    box.querySelector('#back').onclick = () => loadList();
+    box.querySelector('#back').onclick = backToObject;
     return box;
   }
   const t = r.tile;
@@ -272,7 +503,7 @@ function screenCanvas() {
 
   const titleEl = box.querySelector('#title');
   titleEl.onclick = () => editTitle(titleEl, p);
-  box.querySelector('#back').onclick = () => loadList();
+  box.querySelector('#back').onclick = backToObject;
   box.querySelector('#buy').onclick = () => go('buy');
   box.querySelector('#menu').onclick = () => go('buy');
   box.querySelector('#estimate').onclick = () => openPaper('estimate');
@@ -297,7 +528,9 @@ function editTitle(el, p) {
     if (done) return; done = true;
     const t = inp.value.trim();
     if (!t || t === p.title) { render(); return; }
-    Object.assign(state.project, await api(`/api/projects/${p.id}/title`, {method: 'PUT', body: {title: t}}));
+    // p — это текущий объект (state.object на хабе или state.project на холсте):
+    // обновляем именно его, а не жёстко state.project (на хабе он может быть пуст).
+    Object.assign(p, await api(`/api/projects/${p.id}/title`, {method: 'PUT', body: {title: t}}));
   }));
 }
 
@@ -542,7 +775,7 @@ function screenMoney() {
   const commentInp = box.querySelector('#comment');
   box.querySelector('#save-deal').onclick = () => run(async () => { const a = parseFloat(dealInp.value || '0'); Object.assign(state.project, await api(`/api/projects/${p.id}/deal`, {method: 'PUT', body: {amount: a}})); });
   box.querySelector('#add-pay').onclick = () => run(async () => { const a = parseFloat(payInp.value || '0'); if (!(a > 0)) throw new Error('Сумма прихода — больше нуля.'); Object.assign(state.project, await api(`/api/projects/${p.id}/payments`, {method: 'POST', body: {amount: a, comment: commentInp.value}})); });
-  box.querySelector('#back').onclick = () => go('canvas');
+  box.querySelector('#back').onclick = () => (state.object ? go('object') : go('canvas'));
   return box;
 }
 
@@ -688,8 +921,9 @@ async function createProject(d) {
     return;
   }
   state.draft = null;
-  state.project = await api(`/api/projects/${pr.id}`);
-  state.surface = 0; state.lastSchemeUrl = null; state.screen = 'canvas';
+  // Показываем ХАБ объекта: плитка появится там первой работой, рядом «+ работа».
+  state.object = await api(`/api/objects/${pr.id}`);
+  state.screen = 'object';
 }
 
 // --- сборка ------------------------------------------------------------------
@@ -703,7 +937,8 @@ function skeletonList() {
 
 function render() {
   const screens = {
-    list: screenList, create: screenCreate, canvas: screenCanvas,
+    list: screenList, create: screenCreate, object: screenObject,
+    addwork: screenAddWork, work: screenWork, canvas: screenCanvas,
     buy: screenBuy, paper: screenPaper, money: screenMoney, price: screenPrice,
     loading: skeletonList,
   };
@@ -716,9 +951,10 @@ tg?.expand();
 tg?.BackButton?.onClick(() => {
   const s = state.screen;
   if (s === 'list') return;
-  if (s === 'canvas' || s === 'price') loadList();
+  if (s === 'object' || s === 'price') loadList();
   else if (s === 'create') { state.draft = null; loadList(); }
-  else go('canvas');
+  else if (s === 'buy' || s === 'paper') go('canvas');
+  else backToObject();
 });
 
 // Открыт вне Telegram (ссылка в браузере) — initData пуст, сервер ответит 401.
