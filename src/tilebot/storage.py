@@ -77,10 +77,16 @@ class Project(Base):
     title: Mapped[str] = mapped_column(String(128))
     # Сумма, о которой договорились с заказчиком. 0 — не договорились/не записал.
     deal_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    # Замеры комнаты на уровне объекта: {"walls": [...], "height_m": .., "floor_m2": ..}.
+    # Вводятся ОДИН раз, переиспользуются всеми видами работ (плитка/ламинат/плинтус…).
+    measures_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped[User] = relationship(back_populates="projects")
     surfaces: Mapped[list["SurfaceRow"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", lazy="selectin"
+    )
+    works: Mapped[list["WorkRow"]] = relationship(
         back_populates="project", cascade="all, delete-orphan", lazy="selectin"
     )
     payments: Mapped[list["Payment"]] = relationship(
@@ -89,6 +95,10 @@ class Project(Base):
     photos: Mapped[list["Photo"]] = relationship(
         back_populates="project", cascade="all, delete-orphan", lazy="selectin"
     )
+
+    @property
+    def measures(self) -> dict:
+        return json.loads(self.measures_json or "{}")
 
     @property
     def paid(self) -> float:
@@ -133,6 +143,24 @@ class Photo(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     project: Mapped[Project] = relationship(back_populates="photos")
+
+
+class WorkRow(Base):
+    """Одна работа под объектом: вид + её вход (JSON). Результат считается на лету
+    калькуляторами (core/works, core/project для плитки), не хранится."""
+
+    __tablename__ = "works"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(32))  # plaster/laminate/baseboard/reveals/plumbing
+    input_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped[Project] = relationship(back_populates="works")
+
+    def dump(self) -> dict:
+        return json.loads(self.input_json or "{}")
 
 
 class SurfaceRow(Base):
@@ -256,6 +284,11 @@ class Storage:
                     text("ALTER TABLE projects ADD COLUMN deal_amount FLOAT DEFAULT 0.0")
                 )
                 logger.info("Миграция: projects.deal_amount добавлена")
+            if "measures_json" not in columns:
+                await conn.execute(
+                    text("ALTER TABLE projects ADD COLUMN measures_json TEXT DEFAULT '{}'")
+                )
+                logger.info("Миграция: projects.measures_json добавлена")
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
@@ -420,6 +453,7 @@ class Storage:
 
     _LOADED = (
         selectinload(Project.surfaces),
+        selectinload(Project.works),
         selectinload(Project.payments),
         selectinload(Project.photos),
     )
@@ -465,6 +499,69 @@ class Storage:
             if project is None or project.user_id != tg_id:
                 return False
             project.deal_amount = amount
+            await s.commit()
+        return True
+
+    async def set_measures(self, project_id: int, tg_id: int, measures: dict) -> bool:
+        """Замеры комнаты на уровне объекта — их переиспользуют все виды работ."""
+        async with self.session() as s:
+            project = await s.get(Project, project_id)
+            if project is None or project.user_id != tg_id:
+                return False
+            project.measures_json = json.dumps(measures, ensure_ascii=False)
+            await s.commit()
+        return True
+
+    async def add_work(
+        self, project_id: int, tg_id: int, kind: str, input_data: dict
+    ) -> int | None:
+        """Добавить работу под объект. Возвращает id работы или None (не его объект)."""
+        if not await self.owns(project_id, tg_id):
+            return None
+        async with self.session() as s:
+            work = WorkRow(
+                project_id=project_id, kind=kind,
+                input_json=json.dumps(input_data, ensure_ascii=False),
+            )
+            s.add(work)
+            await s.commit()
+            await s.refresh(work)
+            return work.id
+
+    async def get_work(self, work_id: int, tg_id: int) -> WorkRow | None:
+        async with self.session() as s:
+            result = await s.execute(
+                select(WorkRow)
+                .join(Project, WorkRow.project_id == Project.id)
+                .where(WorkRow.id == work_id, Project.user_id == tg_id)
+            )
+            return result.scalar_one_or_none()
+
+    async def update_work(self, work_id: int, tg_id: int, input_data: dict) -> bool:
+        async with self.session() as s:
+            result = await s.execute(
+                select(WorkRow)
+                .join(Project, WorkRow.project_id == Project.id)
+                .where(WorkRow.id == work_id, Project.user_id == tg_id)
+            )
+            work = result.scalar_one_or_none()
+            if work is None:
+                return False
+            work.input_json = json.dumps(input_data, ensure_ascii=False)
+            await s.commit()
+        return True
+
+    async def delete_work(self, work_id: int, tg_id: int) -> bool:
+        async with self.session() as s:
+            result = await s.execute(
+                select(WorkRow)
+                .join(Project, WorkRow.project_id == Project.id)
+                .where(WorkRow.id == work_id, Project.user_id == tg_id)
+            )
+            work = result.scalar_one_or_none()
+            if work is None:
+                return False
+            await s.delete(work)
             await s.commit()
         return True
 
