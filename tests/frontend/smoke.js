@@ -66,6 +66,15 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
     if (/\/api\/me$/.test(url)) return {ok: true, status: 200, json: async () => ({id: 1, name: '', phone: '', price: {wall_tiling: 1200, floor_tiling: 1000, cutting: 60, grouting: 200, grouting_epoxy: 450, waterproofing: 400, priming: 100, demolition: 500, min_order: 0}})};
     if (/\/api\/price$/.test(url)) return {ok: true, status: 200, json: async () => body};
     if (/\/api\/objects\/1$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => OBJECT()};
+    if (/\/api\/objects\/1\/(estimate|act)$/.test(url)) return {ok: true, status: 200, json: async () => ({
+      title: 'Ванная, Борзова',
+      works: [{name: 'Укладка плитки', qty: 20.5, unit: 'м²', price: 1200, total: 24600, total_text: '24 600 ₽'},
+              {name: 'Укладка ламината', qty: 2.9, unit: 'м²', price: 600, total: 1764, total_text: '1 764 ₽'}],
+      works_total: 26364, works_total_text: '26 364 ₽',
+      materials: [{name: 'Плитка 600×300', qty_text: '131', unit: 'шт', packs: 17, cost: 35400},
+                  {name: 'Ламинат', qty_text: '2', unit: 'пачек', cost: 1800}],
+      materials_total: 0, rough_materials_total: 37200, rough_total: 63564, rough_total_text: '63 564 ₽',
+      grand_total: 63564, grand_total_text: '63 564 ₽', note: ''})};
     if (/\/api\/objects\/1\/works$/.test(url) && m === 'POST') return {ok: true, status: 201, json: async () => laminateWork()};
     if (/\/api\/objects\/1\/works\/10$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => laminateWork()};
     if (/\/api\/objects\/1\/works\/10$/.test(url) && m === 'PATCH') return {ok: true, status: 200, json: async () => laminateWork(body.input.underlay !== false)};
@@ -226,6 +235,15 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   check('тап по названию открыл ввод', !!ti);
   if (ti) { ti.value = 'Санузел'; ti.dispatchEvent(new c5.w.Event('blur')); await wait(80); }
   check('переименование ушло на сервер', c5.calls.some((c) => /\/title$/.test(c.url) && c.body?.title === 'Санузел'));
+
+  console.log('\nОбщая смета по объекту (все работы в 1 документ)');
+  const ce = makeApp();
+  await wait();
+  byText(ce.w, '.tile-row', 'Ванная').click(); await wait(80);
+  byText(ce.w, '.btn', 'Смета').click(); await wait(80);
+  check('смета: обе работы (плитка+ламинат)', ce.w.document.body.textContent.includes('Укладка плитки') && ce.w.document.body.textContent.includes('Укладка ламината'));
+  check('смета: общий итог', ce.w.document.body.textContent.includes('63 564'));
+  check('смета: материалы обоих видов', ce.w.document.body.textContent.includes('Плитка 600×300') && ce.w.document.body.textContent.includes('Ламинат'));
 
   console.log('\nВне Telegram (пустой initData)');
   const out = makeApp({initData: ''});

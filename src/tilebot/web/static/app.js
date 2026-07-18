@@ -219,11 +219,11 @@ function screenObject() {
     <div class="list" id="works"></div>
     <button class="btn secondary" id="addwork" style="margin-top:10px">${icon('plus', 'ic')} Добавить работу</button>
     <div class="dock" style="display:flex;flex-direction:column;gap:10px">
-      <div class="result" style="margin:0"><div class="big"><span class="n">${money(o.total || 0)}</span>
-        <span class="u">всего по работам</span></div></div>
+      <button class="btn" id="estimate">${icon('doc', 'ic')} Смета${o.total ? ' · ' + money(o.total) : ''}</button>
       <div class="btn-row">
+        <button class="btn secondary" id="act">${icon('check', 'ic')} Акт</button>
         <button class="btn secondary" id="money">${icon('wallet', 'ic')} Деньги</button>
-        <button class="btn secondary" id="price">${icon('wallet', 'ic')} Прайс</button>
+        <button class="btn secondary" id="price">Прайс</button>
       </div>
     </div></div>`);
   const works = box.querySelector('#works');
@@ -242,10 +242,20 @@ function screenObject() {
   titleEl.onclick = () => editTitle(titleEl, o);
   box.querySelector('#back').onclick = () => loadList();
   box.querySelector('#addwork').onclick = () => go('addwork');
+  box.querySelector('#estimate').onclick = () => openObjectPaper('estimate');
+  box.querySelector('#act').onclick = () => openObjectPaper('act');
   box.querySelector('#money').onclick = () => run(async () => { state.project = await api(`/api/projects/${o.id}`); state.screen = 'money'; });
   box.querySelector('#price').onclick = () => run(async () => { state.price = (await api('/api/me')).price; state.screen = 'price'; });
   return box;
 }
+
+/** Общая смета/акт по объекту — все работы в один документ (экран screenPaper). */
+const openObjectPaper = (kind) => run(async () => {
+  state.paper = await api(`/api/objects/${state.object.id}/${kind}`);
+  state.paper.kind = kind;
+  state.paper.fromObject = true;
+  state.screen = 'paper';
+});
 
 // --- экран: добавить работу (4.2) --------------------------------------------
 
@@ -744,7 +754,7 @@ function screenPaper() {
   e.works.forEach((w) => works.append(h(`<div class="line"><div class="grow"><div>${esc(w.name)}</div><div class="qty">${w.qty}${w.unit ? ' ' + esc(w.unit) + ' × ' + money(w.price) : ''}</div></div><div class="q num">${esc(w.total_text)}</div></div>`)));
   const mats = box.querySelector('#mats');
   e.materials.forEach((m) => mats.append(h(`<div class="line"><div class="grow"><div>${esc(m.name)}</div><div class="qty">${esc(m.qty_text)} ${esc(m.unit)}${m.packs ? ` (${m.packs} уп.)` : ''}</div></div><div class="q num muted">${m.cost ? '≈ ' + money(m.cost) : ''}</div></div>`)));
-  box.querySelector('#back').onclick = () => go('canvas');
+  box.querySelector('#back').onclick = () => (e.fromObject ? go('object') : go('canvas'));
   return box;
 }
 
@@ -953,7 +963,8 @@ tg?.BackButton?.onClick(() => {
   if (s === 'list') return;
   if (s === 'object' || s === 'price') loadList();
   else if (s === 'create') { state.draft = null; loadList(); }
-  else if (s === 'buy' || s === 'paper') go('canvas');
+  else if (s === 'paper') (state.paper?.fromObject ? go('object') : go('canvas'));
+  else if (s === 'buy') go('canvas');
   else backToObject();
 });
 

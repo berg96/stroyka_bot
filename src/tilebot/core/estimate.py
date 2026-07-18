@@ -86,6 +86,12 @@ MATERIAL_PRICE_FIELDS: dict[str, str] = {
     "clips": "mat_clip_pcs",
     "crosses": "mat_cross_pcs",
     "tape": "mat_tape_m",
+    # Материалы других видов работ.
+    "plaster": "mat_plaster_kg",
+    "laminate": "mat_laminate_m2",
+    "underlay": "mat_underlay_m2",
+    "baseboard": "mat_baseboard_pcs",
+    "baseboard_corner": "mat_baseboard_corner_pcs",
 }
 
 

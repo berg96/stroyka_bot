@@ -360,3 +360,22 @@ class TestWorks:
         r = await api.patch(f"/api/objects/{room['id']}/works/{w['id']}",
                             json={"input": {}}, headers={"X-Init-Data": stranger})
         assert r.status_code == 404
+
+
+class TestObjectEstimate:
+    """Общая смета/акт по объекту — все работы (плитка + другие) в один документ."""
+
+    async def test_estimate_combines_all_works(self, api):
+        room = await _room_via_api(api)
+        await api.post(f"/api/objects/{room['id']}/works", json={"kind": "laminate"})
+        est = (await api.get(f"/api/objects/{room['id']}/estimate")).json()
+        assert any("ламинат" in w["name"].lower() for w in est["works"])  # работа ламината
+        assert est["works_total"] > 0  # плитка + ламинат
+        assert any("Ламинат" in m["name"] for m in est["materials"])  # материалы обоих
+        assert est["rough_total"] >= est["works_total"]
+
+    async def test_act_totals_work_plus_materials(self, api):
+        room = await _room_via_api(api)
+        await api.post(f"/api/objects/{room['id']}/works", json={"kind": "plaster"})
+        act = (await api.get(f"/api/objects/{room['id']}/act")).json()
+        assert act["grand_total"] == pytest.approx(act["works_total"] + act["materials_total"])

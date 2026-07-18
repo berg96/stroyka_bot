@@ -23,7 +23,13 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from tilebot.config import Settings, get_settings
-from tilebot.core.estimate import Estimate, PriceList, build_estimate, money
+from tilebot.core.estimate import (
+    Estimate,
+    PriceList,
+    build_estimate,
+    money,
+    rough_material_cost,
+)
 from tilebot.core.materials import MaterialLine
 from tilebot.core.models import (
     BRICK_OFFSETS,
@@ -419,6 +425,68 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
     @app.get("/api/objects/{project_id}")
     async def get_object(project_id: int, user: User) -> dict:
         return await _object_json(await owned(project_id, user), user)
+
+    @app.get("/api/objects/{project_id}/estimate")
+    async def object_estimate(project_id: int, user: User) -> dict:
+        return await _object_paper(await owned(project_id, user), user, materials_cost=False)
+
+    @app.get("/api/objects/{project_id}/act")
+    async def object_act(project_id: int, user: User) -> dict:
+        return await _object_paper(await owned(project_id, user), user, materials_cost=True)
+
+    async def _object_paper(project: Project, user_id: int, *, materials_cost: bool) -> dict:
+        """Общая смета/акт по объекту: все работы (плитка + другие) в один документ."""
+        measures = await _object_measures(project)
+        price = (await store.get_or_create_user(user_id)).price
+        works_out: list[dict] = []
+        materials_out: list[dict] = []
+
+        def add_material(m, cost, packs=None):
+            materials_out.append({**_line_json(m), "cost": cost, "packs": packs})
+
+        # Плитка — своим ядром/сметой.
+        if project.surfaces:
+            res = compute_project([payload_to_surface(r.dump()) for r in project.surfaces])
+            saved = [payload_to_surface(r.dump()) for r in project.surfaces]
+            est = build_estimate(
+                project.title, res.layouts, res.materials, price,
+                waterproofing=any(s.waterproofing for s in saved),
+                grout_kind=saved[-1].grout_kind, include_materials_cost=materials_cost,
+            )
+            for w in est.works:
+                works_out.append({"name": w.name, "qty": round(w.qty, 2), "unit": w.unit,
+                                  "price": w.price, "total": w.total, "total_text": money(w.total)})
+            for m in est.materials:
+                cost = est.material_costs.get(m.name) if materials_cost else None
+                if cost is None:
+                    cost = est.rough_costs.get(m.name)
+                packs = math.ceil(m.qty / m.per_pack) if m.kind == "tile" and m.per_pack else None
+                add_material(m, cost, packs=packs)
+        # Остальные работы.
+        for wr in project.works:
+            r = compute_work(wr.kind, wr.dump(), measures, price)
+            for ln in r.work_lines:
+                works_out.append({
+                    "name": ln.name, "qty": round(ln.qty, 2), "unit": ln.unit,
+                    "price": ln.price, "total": ln.total, "total_text": money(ln.total),
+                })
+            for m in r.materials:
+                add_material(m, rough_material_cost(m, price))
+
+        works_total = sum(w["total"] for w in works_out)
+        mats_total = sum(m["cost"] or 0 for m in materials_out)
+        grand = works_total + mats_total
+        return {
+            "title": project.title,
+            "works": works_out,
+            "works_total": works_total, "works_total_text": money(works_total),
+            "materials": materials_out,
+            "materials_total": mats_total if materials_cost else 0,
+            "rough_materials_total": mats_total,
+            "rough_total": grand, "rough_total_text": money(grand),
+            "grand_total": grand, "grand_total_text": money(grand),
+            "note": "", "price": asdict(price),
+        }
 
     @app.get("/api/objects/{project_id}/works/{work_id}")
     async def get_work_detail(project_id: int, work_id: int, user: User) -> dict:
