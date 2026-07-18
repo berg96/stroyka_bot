@@ -44,14 +44,22 @@ class TestLaminate:
 
 
 class TestBaseboard:
-    def test_planks_and_fittings(self):
-        # периметр 7.6, планка 2.5 → ceil(3.04)=4 планки; 4 угла + 3 стыка = 7 фурнитуры
-        r = baseboard(7.6, plank_m=2.5, corners=4, price=P)
-        planks = next(m for m in r.materials if m.kind == "baseboard")
-        assert planks.qty == 4
-        fit = next(m for m in r.materials if m.kind == "baseboard_corner")
-        assert fit.qty == 7
+    def test_planks_and_fittings_separate(self):
+        # периметр 7.6, планка 2.5 → 4 планки; соединители = планок−1 = 3 (авто)
+        r = baseboard(7.6, plank_m=2.5, inner_corners=4, outer_corners=1, end_caps=2, price=P)
+        by = {m.name: m.qty for m in r.materials}
+        assert by["Плинтус (планка)"] == 4
+        assert by["Соединитель"] == 3  # авто из числа планок
+        assert by["Уголок внутренний"] == 4
+        assert by["Уголок внешний"] == 1
+        assert by["Заглушка"] == 2
         assert r.work_sum == round(7.6, 2) * P.baseboard_mount
+
+    def test_no_fittings_when_zero(self):
+        r = baseboard(2.0, plank_m=2.5, inner_corners=0, outer_corners=0, end_caps=0, price=P)
+        # одна планка → 0 соединителей; уголков/заглушек нет
+        names = {m.name for m in r.materials}
+        assert "Соединитель" not in names and "Уголок внутренний" not in names
 
 
 class TestReveals:
@@ -114,4 +122,4 @@ class TestComputeWork:
         from tilebot.core.works import default_input
         assert default_input("laminate", self.M)["underlay"] is True
         assert len(default_input("plumbing", self.M)["points"]) >= 6
-        assert default_input("baseboard", self.M)["corners"] == 4  # по числу стен
+        assert default_input("baseboard", self.M)["inner_corners"] == 4  # по числу стен

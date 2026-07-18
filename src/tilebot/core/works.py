@@ -112,23 +112,30 @@ def laminate(
 
 
 def baseboard(
-    perimeter_m: float, *, plank_m: float, corners: int, price: PriceList
+    perimeter_m: float, *, plank_m: float, inner_corners: int, outer_corners: int,
+    end_caps: int, price: PriceList,
 ) -> WorkResult:
-    """Напольный плинтус: работа по пог.м + планки + фурнитура (углы/заглушки/стыки)."""
+    """Напольный плинтус: работа по пог.м + планки + фурнитура раздельно.
+
+    Уголки внутренние и внешние — разные детали (и цены). Соединители ставят на
+    стыке двух планок (= планок−1), заглушки — на торцах у проёмов/дверей.
+    """
     per = max(0.0, perimeter_m)
     work = [WorkLine("Монтаж плинтуса", round(per, 2), "пог.м", price.baseboard_mount)]
     planks = math.ceil(per / plank_m) if per and plank_m > 0 else 0
-    # фурнитура: по углу + по стыку между планками
-    joints = max(0, planks - 1)
-    fittings = max(0, corners) + joints
+    connectors = max(0, planks - 1)  # соединители между планками
     mats = [
         MaterialLine("Плинтус (планка)", planks, "шт",
                      note=f"{_fmt(per)} пог.м, планка {_fmt(plank_m)} м", kind="baseboard"),
     ]
-    if fittings:
-        mats.append(MaterialLine(
-            "Уголки, заглушки, стыки", fittings, "шт",
-            note=f"{corners} углов + {joints} стыков", kind="baseboard_corner"))
+    for name, n in (
+        ("Уголок внутренний", max(0, inner_corners)),
+        ("Уголок внешний", max(0, outer_corners)),
+        ("Соединитель", connectors),
+        ("Заглушка", max(0, end_caps)),
+    ):
+        if n:
+            mats.append(MaterialLine(name, n, "шт", kind="baseboard_corner"))
     return WorkResult(
         WorkKind.BASEBOARD, work, mats,
         hero_value=f"{_fmt(per)} пог.м", hero_note=f"{planks} планок",
@@ -226,10 +233,15 @@ def default_input(kind: str, measures: dict) -> dict:
     if kind == WorkKind.LAMINATE:
         return {"pack_m2": 2.1, "waste": 0.05, "underlay": True}
     if kind == WorkKind.BASEBOARD:
+        # Предполагаем углы из формы комнаты: N стен → N внутренних углов (прямоуг.
+        # комната = 4), внешних 0. Мастер правит; соединители считаются авто.
+        n_walls = len(measures.get("walls") or [])
         return {
             "perimeter_m": round(perimeter_m(measures), 2),
             "plank_m": 2.5,
-            "corners": len(measures.get("walls") or []) or 4,
+            "inner_corners": n_walls or 4,
+            "outer_corners": 0,
+            "end_caps": 0,
         }
     if kind == WorkKind.REVEALS:
         return {"openings": [], "reveal_width_cm": 25}
@@ -261,8 +273,12 @@ def compute_work(kind: str, inp: dict, measures: dict, price: PriceList) -> Work
         per = inp.get("perimeter_m")
         if per is None:
             per = perimeter_m(measures)
-        return baseboard(float(per), plank_m=float(inp.get("plank_m", 2.5)),
-                         corners=int(inp.get("corners", 4)), price=price)
+        return baseboard(
+            float(per), plank_m=float(inp.get("plank_m", 2.5)),
+            inner_corners=int(inp.get("inner_corners", 4)),
+            outer_corners=int(inp.get("outer_corners", 0)),
+            end_caps=int(inp.get("end_caps", 0)), price=price,
+        )
     if kind == WorkKind.REVEALS:
         ops = [
             Opening(o.get("name", "Проём"), float(o.get("width_m", 0)),

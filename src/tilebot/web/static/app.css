@@ -351,3 +351,12 @@ input:focus { outline: none; border-color: var(--accent); }
   padding: 4px 8px; border: 1px solid var(--accent); border-radius: 8px;
   background: var(--surface); color: var(--text);
 }
+
+/* откосы: строка проёма (форма вместо prompt) */
+.opening-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; }
+.opening-row .op-name { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+.opening-row .op-w, .opening-row .op-h { width: 56px; text-align: center; }
+.opening-row .op-x { color: var(--hint); }
+.opening-row .op-del { width: 34px; height: 34px; }
+.opening-row .op-del .ic { color: var(--danger); }

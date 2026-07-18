@@ -74,18 +74,43 @@ async function fireLivePatch() {
   const body = pendingBody;
   pendingBody = {};
   const v = ++patchVersion;
+  // Структурные смены меняют НАБОР контролов спеки (раскладка добавляет «смещение»;
+  // поворот/размер меняют подписи) → перерисовываем. Остальное (шов/запас/старт/
+  // затирка/эконом/гидро) — точечно, без перезагрузки страницы.
+  const structural = 'pattern' in body || 'rotate' in body || 'tile_size' in body;
   try {
     const result = await api(`/api/projects/${state.project.id}`, {method: 'PATCH', body});
     if (v !== patchVersion) return; // пришёл ответ на устаревший параметр — игнор
     state.project.result = result;
     setComputing(false);
-    render();
     tg?.HapticFeedback?.notificationOccurred('success');
+    if (structural || state.screen !== 'canvas' || !document.querySelector('#c-tiles')) {
+      render();
+    } else {
+      paintCanvasResult(result);
+      loadScheme(document.querySelector('.scheme'), state.project.id, state.surface);
+    }
   } catch (e) {
     if (v !== patchVersion) return;
     setComputing(false);
     fail(e);
   }
+}
+
+function paintCanvasResult(r) {
+  const set = (id, val) => { const e = document.querySelector(id); if (e) e.textContent = val; };
+  const t = r.tile;
+  set('#c-tiles', r.tiles_grid);
+  set('#c-meta', `${r.area_m2.toFixed(2)} м² · плитка ${t.width_mm.toFixed(0)}×${t.height_mm.toFixed(0)} (${t.lying ? 'лёжа' : 'стоя'})`);
+  set('#c-packs', packs(r));
+  set('#c-cuts', r.cuts_count);
+  const sv = document.querySelector('#savings');
+  if (sv) {
+    sv.innerHTML = '';
+    if (r.savings) sv.append(h(`<div class="savings">${icon('spark', 'ic')}<span>Эконом сберёг <b>${r.savings.tiles} ${plural(r.savings.tiles, 'плитку', 'плитки', 'плиток')}</b>${r.savings.packs ? ` — ${r.savings.packs} ${plural(r.savings.packs, 'упаковку', 'упаковки', 'упаковок')}` : ''}: остатки уходят за угол, а не в мусор.</span></div>`));
+  }
+  const ad = document.querySelector('#advice');
+  if (ad) { ad.innerHTML = ''; r.advice.forEach((a) => ad.append(h(`<div class="advice">${icon('bulb', 'ic')}<span>${esc(a)}</span></div>`))); }
 }
 
 function setComputing(on) {
@@ -394,10 +419,14 @@ function workInput(el, w) {
     blockRow(el, 'layers', 'Схема укладки', seg([['Прямая', '0.05'], ['Диагональ', '0.12'], ['Ёлочка', '0.15']], String(i.waste ?? 0.05), (v) => workPatch({waste: parseFloat(v)})));
     toggleRow(el, 'grid', 'Подложка', i.underlay !== false, () => workPatch({underlay: !(i.underlay !== false)}));
   } else if (w.kind === 'baseboard') {
-    // Периметр из замеров (сумма стен), правится; отдельно вычет проёмов.
+    // Периметр и углы предполагаются из замеров (N стен → N внутр. углов),
+    // соединители считаются авто (планок−1). Всё правится.
+    const nWalls = (m.walls || []).length || 4;
     valueRow(el, 'ruler', 'Периметр', {value: i.perimeter_m ?? Math.round(perim * 100) / 100, fmt: (v) => `${fmtNum(v)} м`, min: 0, max: 200, step: 0.1, onSet: (v) => workPatch({perimeter_m: v})});
     valueRow(el, 'ruler', 'Длина планки', {value: i.plank_m ?? 2.5, fmt: (v) => `${fmtNum(v)} м`, min: 1, max: 4, step: 0.1, onSet: (v) => workPatch({plank_m: v})});
-    valueRow(el, 'grid', 'Углов', {value: i.corners ?? 4, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({corners: Math.round(v)})});
+    valueRow(el, 'grid', 'Внутр. углов', {value: i.inner_corners ?? nWalls, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({inner_corners: Math.round(v)})});
+    valueRow(el, 'grid', 'Внешних углов', {value: i.outer_corners ?? 0, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({outer_corners: Math.round(v)})});
+    valueRow(el, 'door', 'Заглушек', {value: i.end_caps ?? 0, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({end_caps: Math.round(v)})});
   } else if (w.kind === 'reveals') {
     valueRow(el, 'ruler', 'Ширина откоса', {value: i.reveal_width_cm ?? 25, fmt: (v) => `${fmtNum(v)} см`, min: 5, max: 60, step: 1, onSet: (v) => workPatch({reveal_width_cm: v})});
     revealsOpenings(el, i.openings || []);
@@ -407,23 +436,33 @@ function workInput(el, w) {
 }
 
 function revealsOpenings(el, openings) {
-  el.append(h(`<div class="spec-lab" style="margin-top:8px">${icon('door', 'ic')}<span>Проёмы</span></div>`));
-  openings.forEach((o, idx) => {
-    const row = h(`<div class="spec-row"><span class="lab">${esc(o.name || 'Проём')}</span>
-      <span class="stepper"><span class="cur">${fmtNum(o.width_m || 0)}×${fmtNum(o.height_m || 0)} м</span>
-      <button class="minus" aria-label="убрать">×</button></span></div>`).firstElementChild;
-    row.querySelector('.cur').onclick = () => {
-      const v = prompt('Проём — ширина и высота, м (напр. 1.2 1.4):', `${o.width_m || ''} ${o.height_m || ''}`.trim());
-      if (v == null) return;
-      const [ww, hh] = v.replace(',', '.').split(/\s+/).map(parseFloat);
-      const next = openings.slice(); next[idx] = {...o, width_m: ww || 0, height_m: hh || 0};
-      workPatch({openings: next});
-    };
-    row.querySelector('.minus').onclick = () => workPatch({openings: openings.filter((_, j) => j !== idx)});
-    el.append(row);
-  });
+  let list = openings.slice();
+  el.append(h(`<div class="spec-lab" style="margin-top:8px">${icon('door', 'ic')}<span>Проёмы (окна и двери)</span></div>`));
+  const listEl = h(`<div id="openings"></div>`).firstElementChild;
+  const paint = () => {
+    listEl.innerHTML = '';
+    list.forEach((o, idx) => {
+      const row = h(`<div class="opening-row">
+        <input class="op-name" type="text" value="${esc(o.name || 'Проём')}" placeholder="окно">
+        <input class="op-w cur-input" inputmode="decimal" value="${o.width_m || ''}" placeholder="ш">
+        <span class="op-x">×</span>
+        <input class="op-h cur-input" inputmode="decimal" value="${o.height_m || ''}" placeholder="в">
+        <span class="hint">м</span>
+        <button class="icon-btn op-del" aria-label="убрать">${icon('trash', 'ic-sm ic')}</button></div>`).firstElementChild;
+      const num = (sel) => parseFloat(row.querySelector(sel).value.replace(',', '.')) || 0;
+      const upd = () => {
+        list[idx] = {name: row.querySelector('.op-name').value || 'Проём', width_m: num('.op-w'), height_m: num('.op-h')};
+        workPatch({openings: list});
+      };
+      row.querySelectorAll('input').forEach((inp) => inp.onchange = upd);
+      row.querySelector('.op-del').onclick = () => { list = list.filter((_, j) => j !== idx); paint(); workPatch({openings: list}); };
+      listEl.append(row);
+    });
+  };
+  paint();
+  el.append(listEl);
   const add = h(`<button class="btn secondary" style="margin-top:8px">${icon('plus', 'ic')} Добавить проём</button>`);
-  add.querySelector('button').onclick = () => workPatch({openings: [...openings, {name: 'Проём', width_m: 1.2, height_m: 1.4}]});
+  add.querySelector('button').onclick = () => { list = [...list, {name: 'Окно', width_m: 1.2, height_m: 1.4}]; paint(); workPatch({openings: list}); };
   el.append(add);
 }
 
@@ -478,12 +517,12 @@ function screenCanvas() {
       <div class="tabs" id="tabs"></div>
 
       <div class="result">
-        <div class="big"><span class="n js-num">${r.tiles_grid}</span>
+        <div class="big"><span class="n js-num" id="c-tiles">${r.tiles_grid}</span>
           <span class="u">${plural(r.tiles_grid, 'плитка', 'плитки', 'плиток')} на объект</span></div>
-        <div class="meta js-num">${r.area_m2.toFixed(2)} м² · плитка ${t.width_mm.toFixed(0)}×${t.height_mm.toFixed(0)} (${t.lying ? 'лёжа' : 'стоя'})</div>
+        <div class="meta js-num" id="c-meta">${r.area_m2.toFixed(2)} м² · плитка ${t.width_mm.toFixed(0)}×${t.height_mm.toFixed(0)} (${t.lying ? 'лёжа' : 'стоя'})</div>
         <div class="kpis">
-          <div class="kpi"><div class="v js-num">${packs(r)}</div><div class="k">упаковок</div></div>
-          <div class="kpi"><div class="v js-num">${r.cuts_count}</div><div class="k">резать</div></div>
+          <div class="kpi"><div class="v js-num" id="c-packs">${packs(r)}</div><div class="k">упаковок</div></div>
+          <div class="kpi"><div class="v js-num" id="c-cuts">${r.cuts_count}</div><div class="k">резать</div></div>
           <div class="kpi"><div class="v js-num">${r.walls}${r.has_floor ? '+пол' : ''}</div><div class="k">поверхностей</div></div>
         </div>
       </div>
