@@ -293,6 +293,8 @@ const matchOffset = (ratio) => (OFFSETS.find(([, , r]) => Math.abs(r - ratio) < 
 function buildSpec(el, r) {
   const t = r.tile;
 
+  sizeRow(el, r);
+
   blockRow(el, 'grid', 'Раскладка', seg(PATTERNS, r.pattern, (v) => livePatch({pattern: v})));
 
   if (r.pattern === 'brick') {
@@ -364,6 +366,33 @@ function inlineRow(el, ic, lab, valText, onClick) {
 function toggleRow(el, ic, lab, on, onClick) {
   const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${esc(lab)}</span><button class="toggle ${on ? 'on' : ''}"></button></div>`).firstElementChild;
   node.querySelector('.toggle').onclick = onClick;
+  el.append(node);
+}
+
+/** Размер плитки активной поверхности — тап открывает ввод (в см), меняет размер.
+ * У стен и пола плитка своя, поэтому патчим по kind активной поверхности. */
+function sizeRow(el, r) {
+  const s = r.surfaces[state.surface] || r.surfaces[0];
+  const kindTxt = r.has_floor ? ` · ${s.kind === 'floor' ? 'пол' : 'стены'}` : '';
+  const node = h(`<div class="spec-row">${icon('resize', 'ic')}<span class="lab">Размер плитки${kindTxt}</span>
+    <button class="chip">${s.tile_w.toFixed(0)}×${s.tile_h.toFixed(0)}</button></div>`).firstElementChild;
+  const chip = node.querySelector('.chip');
+  chip.onclick = () => {
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.inputMode = 'decimal'; inp.className = 'cur-input'; inp.style.width = '92px';
+    inp.value = `${fmtNum(s.tile_w / 10)} ${fmtNum(s.tile_h / 10)}`;
+    chip.replaceWith(inp); inp.focus(); inp.select();
+    let done = false;
+    const commit = async () => {
+      if (done) return; done = true;
+      try {
+        const {values} = await measure('tile', inp.value);
+        livePatch({tile_size: {width_mm: values[0], height_mm: values[1], kind: s.kind}});
+      } catch (e) { fail(e); }
+    };
+    inp.addEventListener('blur', commit);
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
+  };
   el.append(node);
 }
 

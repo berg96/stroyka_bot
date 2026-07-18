@@ -86,6 +86,7 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   check('спека: степпер шва есть', !!byText(w, '.spec-row .lab', 'Шов'));
   check('шов: и −, и + на месте', w.document.querySelectorAll('.stepper .minus').length >= 1 && w.document.querySelectorAll('.stepper .plus').length >= 1);
   check('спека: эконом-тумблер есть', !!byText(w, '.spec-row', 'Эконом'));
+  check('спека: размер плитки есть', !!byText(w, '.spec-row .lab', 'Размер плитки'));
 
   console.log('\nЖивой пересчёт (тап по раскладке)');
   const before = calls.length;
