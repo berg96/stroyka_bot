@@ -94,10 +94,16 @@ class TestComputeWork:
         r = compute_work("laminate", {"pack_m2": 2.1, "waste": 0.05, "underlay": True}, self.M, P)
         assert r.work_lines[0].qty == 2.9
 
-    def test_baseboard_perimeter_minus_deduct(self):
+    def test_baseboard_perimeter_from_measures(self):
         from tilebot.core.works import compute_work
-        r = compute_work("baseboard", {"plank_m": 2.5, "corners": 4, "deduct_m": 0.8}, self.M, P)
-        assert r.work_lines[0].qty == round(7.6 - 0.8, 2)  # 6.8
+        # без perimeter_m — берёт периметр из замеров (сумма стен = 7.6)
+        r = compute_work("baseboard", {"plank_m": 2.5, "corners": 4}, self.M, P)
+        assert r.work_lines[0].qty == 7.6
+
+    def test_baseboard_manual_perimeter(self):
+        from tilebot.core.works import compute_work
+        r = compute_work("baseboard", {"perimeter_m": 6.8, "plank_m": 2.5, "corners": 4}, self.M, P)
+        assert r.work_lines[0].qty == 6.8
 
     def test_manual_area_overrides_measures(self):
         from tilebot.core.works import compute_work

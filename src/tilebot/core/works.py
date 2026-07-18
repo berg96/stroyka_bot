@@ -226,7 +226,11 @@ def default_input(kind: str, measures: dict) -> dict:
     if kind == WorkKind.LAMINATE:
         return {"pack_m2": 2.1, "waste": 0.05, "underlay": True}
     if kind == WorkKind.BASEBOARD:
-        return {"plank_m": 2.5, "corners": len(measures.get("walls") or []) or 4, "deduct_m": 0.8}
+        return {
+            "perimeter_m": round(perimeter_m(measures), 2),
+            "plank_m": 2.5,
+            "corners": len(measures.get("walls") or []) or 4,
+        }
     if kind == WorkKind.REVEALS:
         return {"openings": [], "reveal_width_cm": 25}
     if kind == WorkKind.PLUMBING:
@@ -256,8 +260,8 @@ def compute_work(kind: str, inp: dict, measures: dict, price: PriceList) -> Work
     if kind == WorkKind.BASEBOARD:
         per = inp.get("perimeter_m")
         if per is None:
-            per = max(0.0, perimeter_m(measures) - float(inp.get("deduct_m", 0)))
-        return baseboard(per, plank_m=float(inp.get("plank_m", 2.5)),
+            per = perimeter_m(measures)
+        return baseboard(float(per), plank_m=float(inp.get("plank_m", 2.5)),
                          corners=int(inp.get("corners", 4)), price=price)
     if kind == WorkKind.REVEALS:
         ops = [

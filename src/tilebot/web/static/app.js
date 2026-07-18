@@ -313,8 +313,26 @@ async function fireWorkPatch() {
   try {
     const w = await api(`/api/objects/${state.object.id}/works/${state.work.id}`, {method: 'PATCH', body: {input}});
     if (v !== wVer) return;
-    state.work = w; render(); tg?.HapticFeedback?.notificationOccurred('success');
+    state.work = w;
+    tg?.HapticFeedback?.notificationOccurred('success');
+    // Точечно, БЕЗ перерисовки всей страницы: обновляем только результат и строки.
+    // Панель ввода (степперы/чипы) держит своё состояние сама.
+    const hero = document.querySelector('#w-hero');
+    if (state.screen === 'work' && hero) {
+      hero.textContent = money(w.work_sum);
+      document.querySelector('#w-meta').textContent = `${w.hero_value}${w.hero_note ? ' · ' + w.hero_note : ''}`;
+      paintWorkLines(document.querySelector('#lines'), w);
+      root.querySelectorAll('.js-wnum').forEach((n) => n.classList.remove('computing-dim'));
+    } else {
+      render();
+    }
   } catch (e) { if (v !== wVer) return; fail(e); }
+}
+
+function paintWorkLines(el, w) {
+  el.innerHTML = '';
+  w.work_lines.forEach((ln) => el.append(h(`<div class="line"><div class="grow">${esc(ln.name)}</div><div class="q num js-wnum">${esc(ln.total_text)}</div></div>`)));
+  w.materials.forEach((m) => el.append(h(`<div class="line"><div class="grow"><div>${esc(m.name)}</div>${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}</div><div class="q num">${esc(m.qty_text)} ${esc(m.unit)}</div></div>`)));
 }
 
 function screenWork() {
@@ -329,8 +347,8 @@ function screenWork() {
     <h2>Ввод · правится на месте</h2>
     <div class="spec" id="input"></div>
     <div class="result" style="margin-top:16px">
-      <div class="big"><span class="n js-wnum">${money(w.work_sum)}</span><span class="u">работа</span></div>
-      <div class="meta js-wnum">${esc(w.hero_value)}${w.hero_note ? ' · ' + esc(w.hero_note) : ''}</div>
+      <div class="big"><span class="n js-wnum" id="w-hero">${money(w.work_sum)}</span><span class="u">работа</span></div>
+      <div class="meta js-wnum" id="w-meta">${esc(w.hero_value)}${w.hero_note ? ' · ' + esc(w.hero_note) : ''}</div>
     </div>
     <h2>В смету пойдёт</h2>
     <div class="card buy" id="lines"></div>
@@ -345,10 +363,7 @@ function screenWork() {
   });
 
   workInput(box.querySelector('#input'), w);
-
-  const lines = box.querySelector('#lines');
-  w.work_lines.forEach((ln) => lines.append(h(`<div class="line"><div class="grow">${esc(ln.name)}</div><div class="q num js-wnum">${esc(ln.total_text)}</div></div>`)));
-  w.materials.forEach((m) => lines.append(h(`<div class="line"><div class="grow"><div>${esc(m.name)}</div>${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}</div><div class="q num">${esc(m.qty_text)} ${esc(m.unit)}</div></div>`)));
+  paintWorkLines(box.querySelector('#lines'), w);
 
   box.querySelector('#back').onclick = () => run(async () => { await reloadObject(); state.screen = 'object'; });
   box.querySelector('#save').onclick = () => run(async () => { await reloadObject(); state.screen = 'object'; });
@@ -363,16 +378,25 @@ function screenWork() {
 /** Панель ввода вида работ — контролы шлют workPatch, результат пересчитывается. */
 function workInput(el, w) {
   const i = w.input || {};
+  const m = state.object.measures || {};
+  const perim = (m.walls || []).reduce((a, b) => a + b, 0);
+  const wallArea = perim * (m.height_m || 0);
+  const floor = m.floor_m2 || 0;
   if (w.kind === 'plaster') {
+    // Площадь стен из замеров, но правится (потолок/часть стены/своё число).
+    valueRow(el, 'box', 'Площадь', {value: i.area_m2 ?? Math.round(wallArea * 100) / 100, fmt: (v) => `${fmtNum(v)} м²`, min: 0, max: 500, step: 0.5, onSet: (v) => workPatch({area_m2: v})});
     valueRow(el, 'box', 'Слои', {value: i.layers ?? 1, fmt: (v) => String(Math.round(v)), min: 1, max: 3, step: 1, onSet: (v) => workPatch({layers: Math.round(v)})});
     valueRow(el, 'droplet', 'Расход смеси', {value: i.kg_per_m2 ?? 1.2, fmt: (v) => `${fmtNum(v)} кг/м²`, min: 0.5, max: 15, step: 0.5, onSet: (v) => workPatch({kg_per_m2: v})});
   } else if (w.kind === 'laminate') {
+    // Площадь пола из замеров — если её нет (комната без пола), мастер вводит сам.
+    valueRow(el, 'box', 'Пол', {value: i.area_m2 ?? Math.round(floor * 100) / 100, fmt: (v) => `${fmtNum(v)} м²`, min: 0, max: 500, step: 0.1, onSet: (v) => workPatch({area_m2: v})});
     valueRow(el, 'box', 'Пачка', {value: i.pack_m2 ?? 2.1, fmt: (v) => `${fmtNum(v)} м²`, min: 0.5, max: 5, step: 0.1, onSet: (v) => workPatch({pack_m2: v})});
     blockRow(el, 'layers', 'Схема укладки', seg([['Прямая', '0.05'], ['Диагональ', '0.12'], ['Ёлочка', '0.15']], String(i.waste ?? 0.05), (v) => workPatch({waste: parseFloat(v)})));
     toggleRow(el, 'grid', 'Подложка', i.underlay !== false, () => workPatch({underlay: !(i.underlay !== false)}));
   } else if (w.kind === 'baseboard') {
+    // Периметр из замеров (сумма стен), правится; отдельно вычет проёмов.
+    valueRow(el, 'ruler', 'Периметр', {value: i.perimeter_m ?? Math.round(perim * 100) / 100, fmt: (v) => `${fmtNum(v)} м`, min: 0, max: 200, step: 0.1, onSet: (v) => workPatch({perimeter_m: v})});
     valueRow(el, 'ruler', 'Длина планки', {value: i.plank_m ?? 2.5, fmt: (v) => `${fmtNum(v)} м`, min: 1, max: 4, step: 0.1, onSet: (v) => workPatch({plank_m: v})});
-    valueRow(el, 'door', 'Вычесть проёмы', {value: i.deduct_m ?? 0, fmt: (v) => `${fmtNum(v)} м`, min: 0, max: 20, step: 0.1, onSet: (v) => workPatch({deduct_m: v})});
     valueRow(el, 'grid', 'Углов', {value: i.corners ?? 4, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({corners: Math.round(v)})});
   } else if (w.kind === 'reveals') {
     valueRow(el, 'ruler', 'Ширина откоса', {value: i.reveal_width_cm ?? 25, fmt: (v) => `${fmtNum(v)} см`, min: 5, max: 60, step: 1, onSet: (v) => workPatch({reveal_width_cm: v})});
@@ -449,6 +473,7 @@ function screenCanvas() {
         <button class="icon-btn" id="menu" aria-label="Ещё">${icon('doc')}</button>
       </div>
 
+      <div class="tabs" id="work-tabs"></div>
       <div class="scheme-wrap"><img class="scheme" alt="Схема раскладки"></div>
       <div class="tabs" id="tabs"></div>
 
@@ -510,6 +535,18 @@ function screenCanvas() {
   // советы
   const adv = box.querySelector('#advice');
   r.advice.forEach((a) => adv.append(h(`<div class="advice">${icon('bulb', 'ic')}<span>${esc(a)}</span></div>`)));
+
+  // Табы всех работ объекта — чтобы с плитки уйти на другую работу без хаба.
+  const wtabs = box.querySelector('#work-tabs');
+  if (state.object && state.object.works && state.object.works.length > 1) {
+    state.object.works.forEach((ow) => {
+      const b = h(`<button class="tab ${ow.kind === 'tile' ? 'on' : ''}">${esc(ow.name)}</button>`);
+      b.querySelector('button').onclick = () => (ow.kind === 'tile' ? null : openWork(ow));
+      wtabs.append(b);
+    });
+  } else {
+    wtabs.remove();
+  }
 
   const titleEl = box.querySelector('#title');
   titleEl.onclick = () => editTitle(titleEl, p);
@@ -599,7 +636,11 @@ function buildSpec(el, r) {
 function seg(opts, current, onPick) {
   const node = h(`<div class="seg">${opts.map(([l, v]) =>
     `<button data-v="${esc(v)}" class="${current === v ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>`).firstElementChild;
-  node.querySelectorAll('button').forEach((b) => b.onclick = () => onPick(b.dataset.v));
+  node.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    // Оптимистично подсвечиваем выбранный — чтобы не ждать render (его может и не быть).
+    node.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    onPick(b.dataset.v);
+  });
   return node;
 }
 
@@ -607,7 +648,10 @@ function seg(opts, current, onPick) {
 function chips(opts, current, onPick) {
   const node = h(`<div class="chips">${opts.map(([l, v, c]) =>
     `<button class="chip ${current === v ? 'on' : ''}" data-v="${esc(v)}">${c ? `<span class="dot" style="background:${c}"></span>` : ''}${esc(l)}</button>`).join('')}</div>`).firstElementChild;
-  node.querySelectorAll('button').forEach((b) => b.onclick = () => onPick(b.dataset.v));
+  node.querySelectorAll('button').forEach((b) => b.onclick = () => {
+    node.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    onPick(b.dataset.v);
+  });
   return node;
 }
 
@@ -628,7 +672,8 @@ function inlineRow(el, ic, lab, valText, onClick) {
 /** Тумблер. */
 function toggleRow(el, ic, lab, on, onClick) {
   const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${esc(lab)}</span><button class="toggle ${on ? 'on' : ''}"></button></div>`).firstElementChild;
-  node.querySelector('.toggle').onclick = onClick;
+  const t = node.querySelector('.toggle');
+  t.onclick = () => { t.classList.toggle('on'); onClick(); };
   el.append(node);
 }
 
@@ -662,28 +707,32 @@ function sizeRow(el, r) {
 /** Значение с ± И вводом с клавиатуры (тап по числу). */
 function valueRow(el, ic, lab, {value, fmt, min, max, step, onSet}) {
   const clamp = (v) => Math.min(max, Math.max(min, Math.round(v * 100) / 100));
+  let val = value;
   const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${esc(lab)}</span>
     <span class="stepper"><button class="minus" aria-label="меньше">−</button>
-    <button class="cur js-num" aria-label="ввести число">${fmt(value)}</button>
+    <span class="cur-slot"></span>
     <button class="plus" aria-label="больше">+</button></span></div>`).firstElementChild;
-  node.querySelector('.minus').onclick = () => onSet(clamp(value - step));
-  node.querySelector('.plus').onclick = () => onSet(clamp(value + step));
-  // тап по числу → поле ввода с клавиатуры
-  const cur = node.querySelector('.cur');
-  cur.onclick = () => {
+  const slot = node.querySelector('.cur-slot');
+  // Контрол обновляет СВОЙ дисплей сам (без render всей страницы), onSet шлёт патч.
+  const paint = () => { slot.innerHTML = `<button class="cur js-num" aria-label="ввести число">${fmt(val)}</button>`; slot.querySelector('.cur').onclick = edit; };
+  const set = (v) => { val = clamp(v); paint(); onSet(val); };
+  function edit() {
     const inp = document.createElement('input');
     inp.type = 'text'; inp.inputMode = 'decimal'; inp.className = 'cur-input';
-    inp.value = String(value).replace('.', ',');
-    cur.replaceWith(inp); inp.focus(); inp.select();
+    inp.value = String(val).replace('.', ',');
+    slot.replaceChildren(inp); inp.focus(); inp.select();
     let done = false;
     const commit = () => {
       if (done) return; done = true;
       const v = parseFloat(inp.value.replace(',', '.'));
-      if (isFinite(v)) onSet(clamp(v)); else render();
+      if (isFinite(v)) set(clamp(v)); else paint();
     };
     inp.addEventListener('blur', commit);
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
-  };
+  }
+  node.querySelector('.minus').onclick = () => set(val - step);
+  node.querySelector('.plus').onclick = () => set(val + step);
+  paint();
   el.append(node);
 }
 
