@@ -242,10 +242,11 @@ function screenCanvas() {
       </div>
     </div>`);
 
-  // схема
+  // схема — тап открывает крупно + скачать
   const img = box.querySelector('.scheme');
   if (state.lastSchemeUrl) img.src = state.lastSchemeUrl;
   if (state.computing) img.classList.add('computing');
+  img.onclick = openViewer;
   loadScheme(img, p.id, state.surface);
 
   // табы поверхностей
@@ -286,83 +287,134 @@ const packs = (r) => {
   return m ? m[1] : '—';
 };
 
+const fmtNum = (v) => String(Math.round(v * 100) / 100).replace('.', ',');
+const matchOffset = (ratio) => (OFFSETS.find(([, , r]) => Math.abs(r - ratio) < 1e-6) || ['', '1/2'])[1];
+
 function buildSpec(el, r) {
   const t = r.tile;
-  const row = (ic, lab, valHtml, onClick) => {
-    const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${lab}</span><span class="ctl"></span></div>`);
-    const ctl = node.querySelector('.ctl');
-    ctl.innerHTML = valHtml;
-    if (onClick) node.querySelector('.spec-row').onclick = (e) => { if (e.target.closest('.ctl button')) return; onClick(); };
-    el.append(node);
-    return ctl;
-  };
 
-  // раскладка — сегмент
-  const seg = h(`<div class="seg">${PATTERNS.map(([l, v]) => `<button data-v="${v}" class="${r.pattern === v ? 'on' : ''}">${l}</button>`).join('')}</div>`);
-  seg.querySelectorAll('button').forEach((b) => b.onclick = () => livePatch({pattern: b.dataset.v}));
-  el.append(h(`<div class="spec-row">${icon('grid', 'ic')}<span class="lab">Раскладка</span></div>`));
-  el.append(wrapCtl(seg));
+  blockRow(el, 'grid', 'Раскладка', seg(PATTERNS, r.pattern, (v) => livePatch({pattern: v})));
 
-  // смещение — только вразбежку
   if (r.pattern === 'brick') {
-    const off = h(`<div class="seg">${OFFSETS.map(([l, v, ratio]) => `<button data-v="${v}" class="${Math.abs(r.offset_ratio - ratio) < 1e-6 ? 'on' : ''}">${l}</button>`).join('')}</div>`);
-    off.querySelectorAll('button').forEach((b) => b.onclick = () => livePatch({offset_label: b.dataset.v}));
-    el.append(h(`<div class="spec-row">${icon('layers', 'ic')}<span class="lab">Смещение рядов</span></div>`));
-    el.append(wrapCtl(off));
+    blockRow(el, 'layers', 'Смещение рядов',
+      seg(OFFSETS, matchOffset(r.offset_ratio), (v) => livePatch({offset_label: v})));
   }
 
-  // начало ряда
-  const start = h(`<div class="seg">${[['От угла', 'edge'], ['От центра', 'center'], ['Авто', 'auto']].map(([l, v]) => `<button data-v="${v}" class="${r.start_from === v ? 'on' : ''}">${l}</button>`).join('')}</div>`);
-  start.querySelectorAll('button').forEach((b) => b.onclick = () => livePatch({start_from: b.dataset.v}));
-  el.append(h(`<div class="spec-row">${icon('ruler', 'ic')}<span class="lab">Начало ряда</span></div>`));
-  el.append(wrapCtl(start));
+  blockRow(el, 'ruler', 'Начало ряда',
+    seg([['От угла', 'edge'], ['От центра', 'center'], ['Авто', 'auto']], r.start_from,
+      (v) => livePatch({start_from: v})));
 
-  // шов — степпер
-  el.append(stepperRow('grid', 'Шов', `${t.joint_text} мм`,
-    () => livePatch({/* шов меняем размером плитки? нет — отдельного PATCH нет */}), null, true));
+  // шов — ± и ввод с клавиатуры (мм)
+  valueRow(el, 'grid', 'Шов', {
+    value: t.joint_mm, fmt: (v) => `${fmtNum(v)} мм`, min: 0.5, max: 10, step: 0.5,
+    onSet: (v) => livePatch({joint_mm: v}),
+  });
 
-  // запас — степпер
-  el.append(stepperRow('package', 'Запас', `${Math.round(r.waste * 100)}%`,
-    () => livePatch({waste: Math.min(0.3, r.waste + 0.01)}),
-    () => livePatch({waste: Math.max(0, r.waste - 0.01)})));
+  // запас — ± и ввод с клавиатуры (%)
+  valueRow(el, 'package', 'Запас', {
+    value: Math.round(r.waste * 100), fmt: (v) => `${Math.round(v)}%`, min: 0, max: 30, step: 1,
+    onSet: (v) => livePatch({waste: v / 100}),
+  });
 
-  // затирка цвет
-  const gc = h(`<div class="chips">${GROUTS.map(([l, v, c]) => `<button class="chip ${r.grout === v ? 'on' : ''}" data-v="${v}"><span class="dot" style="background:${c}"></span>${l}</button>`).join('')}</div>`);
-  gc.querySelectorAll('button').forEach((b) => b.onclick = () => livePatch({grout: b.dataset.v}));
-  el.append(h(`<div class="spec-row">${icon('paint', 'ic')}<span class="lab">Цвет затирки</span></div>`));
-  el.append(wrapCtl(gc));
+  blockRow(el, 'paint', 'Цвет затирки', chips(GROUTS, r.grout, (v) => livePatch({grout: v})));
 
-  // затирка вид
-  const gk = h(`<div class="seg">${[['Цементная', 'cement'], ['Эпоксидная', 'epoxy']].map(([l, v]) => `<button data-v="${v}" class="${r.grout_kind === v ? 'on' : ''}">${l}</button>`).join('')}</div>`);
-  gk.querySelectorAll('button').forEach((b) => b.onclick = () => livePatch({grout_kind: b.dataset.v}));
-  el.append(h(`<div class="spec-row">${icon('droplet', 'ic')}<span class="lab">Вид затирки</span></div>`));
-  el.append(wrapCtl(gk));
+  blockRow(el, 'droplet', 'Вид затирки',
+    seg([['Цементная', 'cement'], ['Эпоксидная', 'epoxy']], r.grout_kind,
+      (v) => livePatch({grout_kind: v})));
 
-  // поворот
-  row('rotate', 'Повернуть плитку', `<button class="chip">${t.width_mm.toFixed(0)}×${t.height_mm.toFixed(0)}</button>`,
+  inlineRow(el, 'rotate', 'Повернуть плитку',
+    `${t.width_mm.toFixed(0)}×${t.height_mm.toFixed(0)} (${t.lying ? 'лёжа' : 'стоя'})`,
     () => livePatch({rotate: true}));
 
-  // эконом — только если можно
-  if (r.can_wrap) {
-    const tog = h(`<div class="spec-row">${icon('spark', 'ic')}<span class="lab">Эконом: лента по кругу</span><button class="toggle ${r.wrap ? 'on' : ''}"></button></div>`);
-    tog.querySelector('.toggle').onclick = () => livePatch({wrap: !r.wrap});
-    el.append(tog);
-  }
-
-  // гидроизоляция
-  const wp = h(`<div class="spec-row">${icon('droplet', 'ic')}<span class="lab">Гидроизоляция</span><button class="toggle ${r.waterproofing ? 'on' : ''}"></button></div>`);
-  wp.querySelector('.toggle').onclick = () => livePatch({waterproofing: !r.waterproofing});
-  el.append(wp);
+  if (r.can_wrap) toggleRow(el, 'spark', 'Эконом: лента по кругу', r.wrap, () => livePatch({wrap: !r.wrap}));
+  toggleRow(el, 'droplet', 'Гидроизоляция', r.waterproofing, () => livePatch({waterproofing: !r.waterproofing}));
 }
 
-function wrapCtl(node) { const c = h(`<div class="spec-row" style="min-height:auto;padding-top:0"><div style="flex:1"></div></div>`); c.querySelector('div>div,div').append?.(node); const holder = h(`<div style="padding:0 4px 8px"></div>`); holder.firstElementChild.append(node); return holder; }
-
-function stepperRow(ic, lab, cur, onPlus, onMinus) {
-  const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${lab}</span>
-    <span class="stepper">${onMinus ? `<button class="minus">−</button>` : ''}<span class="cur js-num">${cur}</span>${onPlus ? `<button class="plus">+</button>` : ''}</span></div>`);
-  node.querySelector('.plus')?.addEventListener('click', onPlus);
-  node.querySelector('.minus')?.addEventListener('click', onMinus);
+/** Сегмент-переключатель: [[label, value], …]. */
+function seg(opts, current, onPick) {
+  const node = h(`<div class="seg">${opts.map(([l, v]) =>
+    `<button data-v="${esc(v)}" class="${current === v ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>`).firstElementChild;
+  node.querySelectorAll('button').forEach((b) => b.onclick = () => onPick(b.dataset.v));
   return node;
+}
+
+/** Чипы с цветным кружком: [[label, value, color?], …]. */
+function chips(opts, current, onPick) {
+  const node = h(`<div class="chips">${opts.map(([l, v, c]) =>
+    `<button class="chip ${current === v ? 'on' : ''}" data-v="${esc(v)}">${c ? `<span class="dot" style="background:${c}"></span>` : ''}${esc(l)}</button>`).join('')}</div>`).firstElementChild;
+  node.querySelectorAll('button').forEach((b) => b.onclick = () => onPick(b.dataset.v));
+  return node;
+}
+
+/** Широкий контрол под подписью (раскладка, затирка). */
+function blockRow(el, ic, lab, control) {
+  const block = h(`<div class="spec-block"><div class="spec-lab">${icon(ic, 'ic')}<span>${esc(lab)}</span></div><div class="spec-ctl"></div></div>`).firstElementChild;
+  block.querySelector('.spec-ctl').append(control);
+  el.append(block);
+}
+
+/** Инлайн-строка: подпись слева, кнопка-значение справа. */
+function inlineRow(el, ic, lab, valText, onClick) {
+  const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${esc(lab)}</span><button class="chip">${esc(valText)}</button></div>`).firstElementChild;
+  node.querySelector('.chip').onclick = onClick;
+  el.append(node);
+}
+
+/** Тумблер. */
+function toggleRow(el, ic, lab, on, onClick) {
+  const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${esc(lab)}</span><button class="toggle ${on ? 'on' : ''}"></button></div>`).firstElementChild;
+  node.querySelector('.toggle').onclick = onClick;
+  el.append(node);
+}
+
+/** Значение с ± И вводом с клавиатуры (тап по числу). */
+function valueRow(el, ic, lab, {value, fmt, min, max, step, onSet}) {
+  const clamp = (v) => Math.min(max, Math.max(min, Math.round(v * 100) / 100));
+  const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${esc(lab)}</span>
+    <span class="stepper"><button class="minus" aria-label="меньше">−</button>
+    <button class="cur js-num" aria-label="ввести число">${fmt(value)}</button>
+    <button class="plus" aria-label="больше">+</button></span></div>`).firstElementChild;
+  node.querySelector('.minus').onclick = () => onSet(clamp(value - step));
+  node.querySelector('.plus').onclick = () => onSet(clamp(value + step));
+  // тап по числу → поле ввода с клавиатуры
+  const cur = node.querySelector('.cur');
+  cur.onclick = () => {
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.inputMode = 'decimal'; inp.className = 'cur-input';
+    inp.value = String(value).replace('.', ',');
+    cur.replaceWith(inp); inp.focus(); inp.select();
+    let done = false;
+    const commit = () => {
+      if (done) return; done = true;
+      const v = parseFloat(inp.value.replace(',', '.'));
+      if (isFinite(v)) onSet(clamp(v)); else render();
+    };
+    inp.addEventListener('blur', commit);
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
+  };
+  el.append(node);
+}
+
+/** Схему — крупно на весь экран, с попыткой скачать. */
+function openViewer() {
+  if (!state.lastSchemeUrl) return;
+  const surf = state.project.result.surfaces[state.surface];
+  const name = `${state.project.title} ${surf?.name || 'схема'}`.replace(/[^\wа-яё \-]/gi, '').trim() + '.png';
+  const v = h(`<div class="viewer"><img src="${state.lastSchemeUrl}" alt="Схема раскладки">
+    <div class="vbtns"><button class="dl">${icon('resize', 'ic')} Скачать</button>
+    <button class="close">Закрыть</button></div></div>`).firstElementChild;
+  const close = () => v.remove();
+  v.querySelector('.close').onclick = close;
+  v.addEventListener('click', (e) => { if (e.target === v) close(); });
+  v.querySelector('.dl').onclick = () => {
+    // Схема защищена initData, поэтому качаем уже загруженный blob, а не URL
+    // (tg.downloadFile сходил бы за ссылкой без подписи и получил 401).
+    const a = document.createElement('a');
+    a.href = state.lastSchemeUrl; a.download = name;
+    document.body.append(a); a.click(); a.remove();
+    tg?.HapticFeedback?.impactOccurred('light');
+  };
+  document.body.append(v);
 }
 
 /** Схема — картинкой с сервера (за проверкой initData, тянем blob'ом). */

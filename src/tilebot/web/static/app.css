@@ -294,3 +294,33 @@ input:focus { outline: none; border-color: var(--accent); }
 @media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
 
 .section-gap { height: 6px; }
+
+/* спека v2: широкий блок под подписью + ввод с клавиатуры + вьюер схемы */
+.spec-block { padding: 12px 4px; border-bottom: 1px solid var(--border); }
+.spec-block:last-child { border-bottom: 0; }
+.spec-lab { display: flex; align-items: center; gap: 12px; font-size: 15px; margin-bottom: 10px; }
+.spec-lab .ic { color: var(--hint); }
+.scheme { cursor: zoom-in; }
+
+.cur-input {
+  width: 74px; padding: 6px 8px; text-align: center;
+  border: 1px solid var(--accent); border-radius: 8px;
+  background: var(--surface); color: var(--text);
+  font: inherit; font-variant-numeric: tabular-nums;
+}
+.stepper .cur { border: 0; background: transparent; color: var(--text); cursor: text;
+  border-bottom: 1px dashed var(--border-strong); border-radius: 0; }
+
+.viewer {
+  position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, .93);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  animation: screen-in .18s ease-out;
+}
+.viewer img { max-width: 100%; max-height: 78vh; object-fit: contain; border-radius: 10px; background: #fff; }
+.viewer .vbtns { display: flex; gap: 12px; }
+.viewer button { display: flex; align-items: center; gap: 8px;
+  padding: 12px 22px; border: 0; border-radius: 999px; font: inherit; font-weight: 600; }
+.viewer .dl { background: var(--accent); color: #fff; }
+.viewer .dl .ic { stroke: #fff; }
+.viewer .close { background: rgba(255, 255, 255, .16); color: #fff; }

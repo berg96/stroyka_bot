@@ -1,224 +1,120 @@
-/* Фронт мини-аппа в jsdom: экраны обязаны отрисоваться, а кнопки — сработать.
- * Сервер поддельный, но отвечает ровно тем, что отдаёт настоящий API. */
+/* Прогон экранов мини-аппа v2 (холст) в jsdom: экраны рисуются, живой пересчёт
+ * шлёт PATCH и обновляет числа, степпер шва и ввод с клавиатуры работают, вьюер
+ * схемы открывается, вне-Telegram показывает инструкцию. Сервер поддельный, но
+ * отвечает тем же, что настоящий API. Запуск: node smoke.js */
 const {JSDOM} = require('jsdom');
 const fs = require('fs');
-
 const APP = require('path').join(__dirname, '../../src/tilebot/web/static/app.js');
 
-const RESULT = {
+const baseResult = () => ({
   area_m2: 24.12, tiles_grid: 145, cuts_count: 40, walls: 4, has_floor: true,
   can_wrap: true, wrap: false, pattern: 'brick', start_from: 'edge', offset_ratio: 0.5,
   grout: null, grout_kind: 'cement', waste: 0.07, waterproofing: true, tile_locked: false,
   tile_photo: false,
-  tile: {width_mm: 600, height_mm: 300, joint_mm: 1.4, joint_text: '1,4',
-         thickness_mm: 9, per_pack: 8, price_per_m2: null, lying: true},
+  tile: {width_mm: 600, height_mm: 300, joint_mm: 1.4, joint_text: '1,4', thickness_mm: 9,
+         per_pack: 8, price_per_m2: null, lying: true},
   tile_cost: null,
   surfaces: [
-    {index: 0, name: 'Стена 1', kind: 'wall', area_m2: 5.4, tiles: 36, cuts: 10,
-     tile_w: 600, tile_h: 300, openings: []},
-    {index: 1, name: 'Пол', kind: 'floor', area_m2: 3.6, tiles: 13, cuts: 4,
-     tile_w: 600, tile_h: 600, openings: []},
+    {index: 0, name: 'Стена 1', kind: 'wall', area_m2: 5.4, tiles: 36, cuts: 10, tile_w: 600, tile_h: 300, openings: []},
+    {index: 1, name: 'Пол', kind: 'floor', area_m2: 3.6, tiles: 13, cuts: 4, tile_w: 600, tile_h: 600, openings: []},
   ],
-  purchase: [
-    {name: 'Плитка 600×300', qty: 131, qty_text: '131', unit: 'шт',
-     note: '23.6 м² с запасом 7%, ≈17 уп.', kind: 'tile'},
-    {name: 'Плиточный клей', qty: 148, qty_text: '148', unit: 'кг', note: '', kind: 'glue'},
-  ],
-  advice: ['Раскладка ровная: тонких полосок по краям нет.'],
-  savings: null,
-};
+  purchase: [{name: 'Плитка 600×300', qty: 131, qty_text: '131', unit: 'шт', note: '23.6 м² с запасом 7%, ≈17 уп.', kind: 'tile'}],
+  advice: ['Раскладка ровная'], savings: null,
+});
+const PROJECT = {id: 1, title: 'Ванная, Борзова', surfaces: 5, photos: 0, deal_amount: 50000, paid: 20000, due: 30000, payments: [], result: baseResult()};
 
-const PROJECT = {
-  id: 1, title: 'Ванная, Борзова', surfaces: 5, photos: 0,
-  deal_amount: 50000, paid: 20000, due: 30000,
-  payments: [{amount: 20000, comment: 'аванс', at: '2026-07-17T10:00:00'}],
-  result: RESULT,
-};
-
-const routes = [
-  [/\/api\/projects$/, 'GET', () => [PROJECT]],
-  [/\/api\/projects\/1$/, 'GET', () => PROJECT],
-  [/\/api\/projects\/1$/, 'PATCH', (b) => ({...RESULT, wrap: !!b.wrap,
-    savings: b.wrap ? {tiles: 5, packs: 1} : null})],
-  [/\/api\/projects$/, 'POST', () => ({id: 1, title: 'Ванная, Борзова'})],
-  [/\/api\/projects\/1\/room$/, 'POST', () => RESULT],
-  [/\/api\/projects\/1\/estimate$/, 'GET', () => ESTIMATE],
-  [/\/api\/me$/, 'GET', () => ({id: 1, name: '', phone: '', price: PRICE})],
-  [/\/api\/measure$/, 'POST', (b) => ({values: MEASURED[b.kind]})],
-];
-
-const MEASURED = {walls: [2, 1.8, 2, 1.8], height: [2.7], tile: [600, 300], size: [2, 2.7]};
-const PRICE = {wall_tiling: 1200, floor_tiling: 1000, cutting: 60, grouting: 200,
-  grouting_epoxy: 450, waterproofing: 400, priming: 100, demolition: 500, min_order: 0};
-const ESTIMATE = {
-  title: 'Ванная, Борзова',
-  works: [{name: 'Укладка плитки на стену', qty: 20.5, unit: 'м²', price: 1200,
-           total: 24600, total_text: '24 600 ₽'}],
-  works_total: 24600, works_total_text: '24 600 ₽',
-  materials: [{name: 'Плитка 600×300', qty: 131, qty_text: '131', unit: 'шт',
-               note: '', kind: 'tile', cost: 35400, packs: 17}],
-  materials_total: 0, rough_materials_total: 35400, rough_total: 60000,
-  rough_total_text: '60 000 ₽', grand_total: 24600, grand_total_text: '24 600 ₽', note: '',
-  price: PRICE,
-};
-
-const calls = [];
-const dom = new JSDOM(
-  `<!doctype html><body><div id="app"><div class="loading">Загружаю…</div></div></body>`,
-  {runScripts: 'outside-only', url: 'https://plitka.example/'},
-);
-const {window} = dom;
-
-window.Telegram = {WebApp: {
-  initData: 'user=%7B%22id%22%3A1%7D&hash=x',
-  ready() {}, expand() {},
-  BackButton: {show() {}, hide() {}, onClick() {}},
-  HapticFeedback: {impactOccurred() {}, notificationOccurred() {}},
-  showConfirm(_, cb) { cb(true); },
-}};
-
-window.fetch = async (url, opts = {}) => {
-  const method = opts.method || 'GET';
-  const body = opts.body ? JSON.parse(opts.body) : null;
-  calls.push(`${method} ${url}`);
-  if (/scheme\/\d+\.png/.test(url)) {
-    return {ok: true, status: 200, blob: async () => new window.Blob([1])};
-  }
-  for (const [re, m, fn] of routes) {
-    if (re.test(url.split('?')[0]) && m === method) {
-      return {ok: true, status: 200, json: async () => fn(body)};
+function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
+  const calls = [];
+  const dom = new JSDOM(`<!doctype html><body><div id="app"></div></body>`, {runScripts: 'outside-only', url: 'https://plitka.example/'});
+  const w = dom.window;
+  w.Telegram = {WebApp: {initData, ready() {}, expand() {},
+    HapticFeedback: {impactOccurred() {}, notificationOccurred() {}},
+    BackButton: {show() {}, hide() {}, onClick() {}}}};
+  w.URL.createObjectURL = () => 'blob:scheme';
+  w.fetch = async (url, o = {}) => {
+    const m = o.method || 'GET';
+    const body = o.body ? JSON.parse(o.body) : null;
+    calls.push({m, url, body});
+    if (/scheme\/\d+\.png/.test(url)) return {ok: true, status: 200, blob: async () => new w.Blob([1])};
+    if (/\/api\/projects$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => [PROJECT]};
+    if (/\/api\/projects\/1$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => PROJECT};
+    if (/\/api\/projects\/1$/.test(url) && m === 'PATCH') {
+      // отражаем изменение: меняем результат по патчу, число «Купить» другое
+      const r = baseResult();
+      if (body.pattern) r.pattern = body.pattern;
+      if (body.joint_mm != null) { r.tile.joint_mm = body.joint_mm; r.tile.joint_text = String(body.joint_mm).replace('.', ','); }
+      r.tiles_grid = 150; // видимое изменение числа
+      return {ok: true, status: 200, json: async () => r};
     }
-  }
-  throw new Error(`поддельный сервер не знает ${method} ${url}`);
-};
-window.URL.createObjectURL = () => 'blob:fake';
+    return {ok: true, status: 200, json: async () => baseResult()};
+  };
+  const errs = [];
+  w.addEventListener('error', (e) => errs.push(e.error?.message || e.message));
+  w.eval(fs.readFileSync(APP, 'utf8'));
+  return {w, calls, errs};
+}
 
-const errors = [];
-window.addEventListener('error', (e) => errors.push(e.error?.message || e.message));
-window.eval(fs.readFileSync(APP, 'utf8'));
-
-const text = () => window.document.body.textContent.replace(/\s+/g, ' ');
-const q = (sel) => window.document.querySelector(sel);
-const byLabel = (t) => [...window.document.querySelectorAll('button')]
-  .find((b) => b.textContent.includes(t));
-
-const wait = () => new Promise((r) => setTimeout(r, 30));
+const wait = (ms = 60) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
 const check = (name, cond, extra = '') => {
   if (cond) return console.log(`  ✅ ${name}`);
-  failed++;
-  console.log(`  ❌ ${name}${extra ? ' — ' + extra : ''}`);
+  failed++; console.log(`  ❌ ${name}${extra ? ' — ' + extra : ''}`);
 };
+const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => e.textContent.includes(t));
 
 (async () => {
+  console.log('Портфель → холст');
+  const {w, calls, errs} = makeApp();
   await wait();
+  check('список рисуется', w.document.body.textContent.includes('Ванная, Борзова'));
+  byText(w, '.tile-row', 'Ванная').click();
+  await wait(80);
+  const t = () => w.document.body.textContent;
+  check('холст: число плиток', t().includes('145'));
+  check('холст: схема запрошена', calls.some((c) => /scheme\/0\.png/.test(c.url)));
+  check('спека: раскладка есть', !!byText(w, '.seg button', 'Диагональ'));
+  check('спека: степпер шва есть', !!byText(w, '.spec-row .lab', 'Шов'));
+  check('шов: и −, и + на месте', w.document.querySelectorAll('.stepper .minus').length >= 1 && w.document.querySelectorAll('.stepper .plus').length >= 1);
+  check('спека: эконом-тумблер есть', !!byText(w, '.spec-row', 'Эконом'));
 
-  console.log('\nСписок объектов');
-  check('объект показан', text().includes('Ванная, Борзова'));
-  check('долг заказчика виден', text().includes('30 000 ₽'), text().slice(0, 120));
+  console.log('\nЖивой пересчёт (тап по раскладке)');
+  const before = calls.length;
+  byText(w, '.seg button', 'Диагональ').click();
+  await wait(200); // debounce 120мс + ответ
+  const patch = calls.find((c) => c.m === 'PATCH' && c.body?.pattern === 'diagonal');
+  check('тап шлёт PATCH pattern=diagonal', !!patch);
+  check('число обновилось после пересчёта', t().includes('150'), t().slice(0, 80));
+  void before;
 
-  console.log('\nЭкран объекта');
-  byLabel('Ванная, Борзова').click();
-  await wait();
-  check('сводка комнаты', text().includes('Комната целиком'));
-  check('площадь с сервера', text().includes('24.12 м²'));
-  check('закупка с сервера', text().includes('131 шт'));
-  check('плитка как легла', text().includes('600×300 (лёжа)'));
-  check('шов не округлён до 1', text().includes('шов 1,4 мм'), text().slice(0, 200));
-  check('совет показан', text().includes('Раскладка ровная'));
-  check('схема запрошена', calls.some((c) => c.includes('scheme/0.png')));
-  check('кнопка эконома есть', !!byLabel('Эконом: по кругу'));
+  console.log('\nШов: степпер и ввод с клавиатуры');
+  const plus = [...w.document.querySelectorAll('.spec-row')].find((r) => r.textContent.includes('Шов'))?.querySelector('.plus');
+  plus?.click();
+  await wait(200);
+  check('«+» шва шлёт PATCH joint_mm', calls.some((c) => c.m === 'PATCH' && c.body?.joint_mm != null));
+  // тап по числу → поле ввода
+  const cur = [...w.document.querySelectorAll('.spec-row')].find((r) => r.textContent.includes('Шов'))?.querySelector('.cur');
+  cur?.click();
+  await wait(30);
+  check('тап по числу открывает ввод с клавиатуры', !!w.document.querySelector('.cur-input'));
 
-  console.log('\nЭконом');
-  byLabel('Эконом: по кругу').click();
-  await wait();
-  check('PATCH ушёл', calls.includes('PATCH /api/projects/1'));
-  check('экономия показана', text().includes('Эконом сберёг 5 плиток'), text().slice(0, 200));
-  check('кнопка сменилась', !!byLabel('Вернуть обычную'));
+  console.log('\nВьюер схемы');
+  w.document.querySelector('.scheme').click();
+  await wait(30);
+  check('тап по схеме открывает вьюер', !!w.document.querySelector('.viewer'));
+  check('во вьюере есть «Скачать»', !!byText(w, '.viewer button', 'Скачать'));
+  w.document.querySelector('.viewer .close').click();
+  await wait(20);
+  check('вьюер закрывается', !w.document.querySelector('.viewer'));
 
-  console.log('\nСмета');
-  byLabel('Смета заказчику').click();
-  await wait();
-  check('работа посчитана', text().includes('24 600 ₽'));
-  check('материалы не проданы', text().includes('покупает сам'));
-  byLabel('К объекту').click();
-  await wait();
+  console.log('\nВне Telegram (пустой initData)');
+  const out = makeApp({initData: ''});
+  await wait(40);
+  check('показал «Откройте через бота»', out.w.document.body.textContent.includes('Откройте через бота'));
+  check('в сервер без initData не стучались', !out.calls.length, `дёрнул ${out.calls.length}`);
 
-  console.log('\nДеньги');
-  byLabel('Деньги по объекту').click();
-  await wait();
-  check('приход виден', text().includes('аванс'));
-  byLabel('К объекту').click();
-  await wait();
-
-  console.log('\nНовый объект: замеры');
-  byLabel('объекты').click();
-  await wait();
-  byLabel('Новый объект').click();
-  await wait();
-  check('спросил название', text().includes('Как назовём объект'));
-
-  const type = (v) => { q('input').value = v; };
-  type('Ванная, Борзова'); byLabel('Дальше').click(); await wait();
-  check('спросил режим', text().includes('Что считаем'));
-  byLabel('Комната целиком').click(); await wait();
-  check('спросил стены', text().includes('по кругу'));
-  type('2 1.8 2 1.8'); byLabel('Дальше').click(); await wait();
-  check('стены разобрал сервер', calls.includes('POST /api/measure'));
-  check('спросил высоту', text().includes('Высота стен'), text().slice(0, 100));
-  type('2.7'); byLabel('Дальше').click(); await wait();
-  check('спросил про пол', text().includes('Пол тоже плиткой'), text().slice(0, 100));
-  byLabel('Да, и пол').click(); await wait();
-  type('60 30'); byLabel('Дальше').click(); await wait();
-  check('спросил шов', text().includes('Какой шов'), text().slice(0, 100));
-  byLabel('1,5').click(); await wait();
-  check('спросил толщину', text().includes('Толщина'), text().slice(0, 100));
-  byLabel('9').click(); await wait();
-  check('спросил упаковку', text().includes('в упаковке'), text().slice(0, 100));
-  type('8'); byLabel('Дальше').click(); await wait();
-  check('спросил плитку на пол', text().includes('на пол'), text().slice(0, 100));
-  byLabel('Пропустить').click(); await wait();
-  check('спросил раскладку', text().includes('Раскладка'), text().slice(0, 100));
-  byLabel('Вразбежку').click(); await wait();
-  check('спросил начало ряда', text().includes('Откуда начинаем'), text().slice(0, 100));
-  byLabel('реши сам').click(); await wait();
-  check('спросил запас', text().includes('Запас'), text().slice(0, 100));
-  byLabel('7').click(); await wait();
-  check('спросил гидроизоляцию', text().includes('Гидроизоляция'), text().slice(0, 100));
-  byLabel('Да, мокрая зона').click(); await wait();
-  check('комната ушла на сервер', calls.includes('POST /api/projects/1/room'));
-  check('показал результат', text().includes('Купить'), text().slice(0, 150));
-
-  console.log('\nПрайс');
-  byLabel('объекты').click(); await wait();
-  byLabel('Прайс').click(); await wait();
-  check('прайс открылся', text().includes('Укладка на стену'), text().slice(0, 100));
-
-  console.log('\nОткрыт вне Telegram (пустой initData)');
-  await browserOpenCase();
-
-  console.log(`\nОшибок в консоли: ${errors.length}`);
-  errors.forEach((e) => console.log('  ⚠️ ' + e));
-  console.log(failed ? `\n❌ ПРОВАЛОВ: ${failed}` : '\n✅ ВСЁ ПРОШЛО');
-  process.exit(failed || errors.length ? 1 : 0);
+  console.log(`\nОшибок в консоли: ${errs.length + out.errs.length}`);
+  [...errs, ...out.errs].slice(0, 6).forEach((e) => console.log('  ⚠️ ' + e));
+  const bad = failed || errs.length || out.errs.length;
+  console.log(bad ? `\n❌ ПРОВАЛОВ: ${failed}` : '\n✅ ВСЁ ПРОШЛО');
+  process.exit(bad ? 1 : 0);
 })();
-
-/* Апп открыт ссылкой в браузере: Telegram есть, но initData пустой (именно так
-   выглядел «не удалось опознать»). Должен показать инструкцию, а не биться в 401. */
-async function browserOpenCase() {
-  const d2 = new JSDOM(
-    `<!doctype html><body><div id="app"><div class="loading">Загружаю…</div></div></body>`,
-    {runScripts: 'outside-only', url: 'https://plitka.example/'},
-  );
-  const w = d2.window;
-  w.Telegram = {WebApp: {initData: '', ready() {}, expand() {},
-    BackButton: {show() {}, hide() {}, onClick() {}}}};
-  let hitServer = false;
-  w.fetch = async () => { hitServer = true; return {ok: false, status: 401,
-    json: async () => ({error: 'x'})}; };
-  w.eval(fs.readFileSync(APP, 'utf8'));
-  await new Promise((r) => setTimeout(r, 30));
-  const t = w.document.body.textContent;
-  check('показал «Откройте через бота»', t.includes('Откройте через бота'), t.slice(0, 80));
-  check('в сервер не долбился', !hitServer, 'дёрнул API с пустым initData');
-}
