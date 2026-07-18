@@ -519,16 +519,16 @@ function screenCreate() {
     floor: () => choose('Пол тоже плиткой?', [['Да, и пол', () => { d.with_floor = true; d.step = 'tile'; }], ['Только стены', () => { d.with_floor = false; d.step = 'tile'; }]]),
     kind: () => choose('Что меряем?', [['Стена', () => { d.kind = 'wall'; d.step = 'size'; }], ['Пол', () => { d.kind = 'floor'; d.step = 'size'; }]]),
     size: () => ask('Ширина и высота, м', '2 2.7', 'text', async (v) => { const [w, hh] = (await measure('size', v)).values; d.width_m = w; d.height_m = hh; d.step = 'tile'; }),
-    tile: () => ask('Плитка, см', '60 30', 'text', async (v) => { const [w, hh] = (await measure('tile', v)).values; d.tile = {width_mm: w, height_mm: hh, joint_mm: 2, thickness_mm: 9}; d.pattern = 'straight'; d.start_from = 'auto'; d.waste = 0.07; save(); }, 'можно в см (60 30) или мм (600 300). Шов, раскладку и запас докрутишь на холсте.'),
+    tile: () => ask('Плитка, см', '60 30', 'text', async (v) => { const [w, hh] = (await measure('tile', v)).values; d.tile = {width_mm: w, height_mm: hh, joint_mm: 2, thickness_mm: 9}; d.pattern = 'straight'; d.start_from = 'auto'; d.waste = 0.07; await save(); }, 'можно в см (60 30) или мм (600 300). Шов, раскладку и запас докрутишь на холсте.'),
   };
+  // Без своего run(): save() зовётся ИЗ ask() (внутри run()), вложенный run()
+  // увидел бы busy и молча вышел — объект бы не создался, а поле «сбросилось».
   async function save() {
-    await run(async () => {
-      const pr = await api('/api/projects', {method: 'POST', body: {title: d.title}});
-      const common = {tile: d.tile, pattern: d.pattern, start_from: d.start_from, waste: d.waste, waterproofing: false};
-      if (d.mode === 'room') await api(`/api/projects/${pr.id}/room`, {method: 'POST', body: {...common, walls_m: d.walls, height_m: d.height, with_floor: !!d.with_floor}});
-      else await api(`/api/projects/${pr.id}/surface`, {method: 'POST', body: {...common, kind: d.kind, width_m: d.width_m, height_m: d.height_m}});
-      state.draft = null; state.project = await api(`/api/projects/${pr.id}`); state.surface = 0; state.lastSchemeUrl = null; state.screen = 'canvas';
-    });
+    const pr = await api('/api/projects', {method: 'POST', body: {title: d.title}});
+    const common = {tile: d.tile, pattern: d.pattern, start_from: d.start_from, waste: d.waste, waterproofing: false};
+    if (d.mode === 'room') await api(`/api/projects/${pr.id}/room`, {method: 'POST', body: {...common, walls_m: d.walls, height_m: d.height, with_floor: !!d.with_floor}});
+    else await api(`/api/projects/${pr.id}/surface`, {method: 'POST', body: {...common, kind: d.kind, width_m: d.width_m, height_m: d.height_m}});
+    state.draft = null; state.project = await api(`/api/projects/${pr.id}`); state.surface = 0; state.lastSchemeUrl = null; state.screen = 'canvas';
   }
   return steps[d.step]();
 }

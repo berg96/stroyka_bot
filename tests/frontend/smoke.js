@@ -36,6 +36,16 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
     const body = o.body ? JSON.parse(o.body) : null;
     calls.push({m, url, body});
     if (/scheme\/\d+\.png/.test(url)) return {ok: true, status: 200, blob: async () => new w.Blob([1])};
+    if (/\/api\/measure$/.test(url)) {
+      // те же пороги, что бэкенд: плитка в см (<200 → ×10)
+      const nums = body.text.trim().split(/[\s,;xх*×]+/).map((x) => parseFloat(x.replace(',', '.')));
+      const conv = body.kind === 'tile' ? nums.map((v) => v < 200 ? v * 10 : v)
+        : body.kind === 'walls' || body.kind === 'height' ? nums.map((v) => v < 20 ? v : v / 1000)
+          : nums.map((v) => (v < 20 ? v * 1000 : v) / 1000);
+      return {ok: true, status: 200, json: async () => ({values: conv})};
+    }
+    if (/\/api\/projects$/.test(url) && m === 'POST') return {ok: true, status: 201, json: async () => ({id: 1, title: body.title})};
+    if (/\/api\/projects\/1\/(room|surface)$/.test(url)) return {ok: true, status: 201, json: async () => baseResult()};
     if (/\/api\/projects$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => [PROJECT]};
     if (/\/api\/projects\/1$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => PROJECT};
     if (/\/api\/projects\/1$/.test(url) && m === 'PATCH') {
@@ -105,6 +115,27 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   w.document.querySelector('.viewer .close').click();
   await wait(20);
   check('вьюер закрывается', !w.document.querySelector('.viewer'));
+
+  console.log('\nСоздание объекта (баг вложенного run в save)');
+  const c2 = makeApp();
+  await wait();
+  byText(c2.w, '.btn', 'Новый объект').click();
+  await wait(50);
+  const type = (val) => { c2.w.document.querySelector('input').value = val; };
+  const nextBtn = () => byText(c2.w, '.btn', 'Дальше');
+  type('Ванная тест'); nextBtn().click(); await wait(50);
+  check('спросил режим', c2.w.document.body.textContent.includes('Что считаем'));
+  byText(c2.w, '.btn', 'Комната целиком').click(); await wait(50);
+  type('2 1.8 2 1.8'); nextBtn().click(); await wait(80);
+  check('спросил высоту', c2.w.document.body.textContent.includes('Высота'));
+  type('2.7'); nextBtn().click(); await wait(80);
+  byText(c2.w, '.btn', 'Да, и пол').click(); await wait(50);
+  check('спросил плитку', c2.w.document.body.textContent.includes('Плитка'));
+  type('60 30'); nextBtn().click(); await wait(120);
+  check('объект СОЗДАН (POST /room)', c2.calls.some((c) => /\/room$/.test(c.url) && c.m === 'POST'),
+    'нажал плитку — а объект не создался (вложенный run проглотил save)');
+  check('перешёл на холст', c2.w.document.body.textContent.includes('на объект'), c2.w.document.body.textContent.slice(0, 120));
+  check('размер «60 30» ушёл как 600×300', c2.calls.some((c) => /\/measure$/.test(c.url) && c.body?.text === '60 30'));
 
   console.log('\nВне Telegram (пустой initData)');
   const out = makeApp({initData: ''});
