@@ -46,6 +46,11 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
     }
     if (/\/api\/projects$/.test(url) && m === 'POST') return {ok: true, status: 201, json: async () => ({id: 1, title: body.title})};
     if (/\/api\/projects\/1\/(room|surface)$/.test(url)) return {ok: true, status: 201, json: async () => baseResult()};
+    if (/\/deal$/.test(url)) return {ok: true, status: 200, json: async () => ({...PROJECT, deal_amount: body.amount, due: body.amount})};
+    if (/\/payments$/.test(url)) return {ok: true, status: 201, json: async () => ({...PROJECT, paid: body.amount, due: 0, payments: [{amount: body.amount, comment: body.comment, at: '2026-07-18T03:00:00'}]})};
+    if (/\/title$/.test(url)) return {ok: true, status: 200, json: async () => ({...PROJECT, title: body.title})};
+    if (/\/api\/me$/.test(url)) return {ok: true, status: 200, json: async () => ({id: 1, name: '', phone: '', price: {wall_tiling: 1200, floor_tiling: 1000, cutting: 60, grouting: 200, grouting_epoxy: 450, waterproofing: 400, priming: 100, demolition: 500, min_order: 0}})};
+    if (/\/api\/price$/.test(url)) return {ok: true, status: 200, json: async () => body};
     if (/\/api\/projects$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => [PROJECT]};
     if (/\/api\/projects\/1$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => PROJECT};
     if (/\/api\/projects\/1$/.test(url) && m === 'PATCH') {
@@ -156,6 +161,27 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   check('ошибка высоты показана под полем', !!byText(c3.w, '.field .err', 'единицы перепутаны'),
     'ждал .field .err с текстом');
   check('объект НЕ создан при ошибке', !c3.calls.some((c) => /\/room$/.test(c.url)));
+
+  console.log('\nДеньги (баг DocumentFragment: null.value)');
+  const c4 = makeApp();
+  await wait();
+  byText(c4.w, '.tile-row', 'Ванная').click(); await wait(80);
+  byText(c4.w, '.btn', 'Деньги').click(); await wait(50);
+  c4.w.document.querySelector('#pay').value = '20000';
+  byText(c4.w, '.btn', 'Записать приход').click(); await wait(120);
+  check('приход записан без ошибки', c4.calls.some((c) => /\/payments$/.test(c.url)) && !c4.errs.length,
+    c4.errs[0] || '');
+  check('получено обновилось', c4.w.document.body.textContent.includes('20 000'));
+
+  console.log('\nПереименование объекта');
+  const c5 = makeApp();
+  await wait();
+  byText(c5.w, '.tile-row', 'Ванная').click(); await wait(80);
+  c5.w.document.querySelector('#title').click(); await wait(20);
+  const ti = c5.w.document.querySelector('.title-input');
+  check('тап по названию открыл ввод', !!ti);
+  if (ti) { ti.value = 'Санузел'; ti.dispatchEvent(new c5.w.Event('blur')); await wait(80); }
+  check('переименование ушло на сервер', c5.calls.some((c) => /\/title$/.test(c.url) && c.body?.title === 'Санузел'));
 
   console.log('\nВне Telegram (пустой initData)');
   const out = makeApp({initData: ''});

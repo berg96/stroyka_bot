@@ -419,6 +419,12 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
         await store.save_user(record)
         return {"name": record.name, "phone": record.phone}
 
+    @app.put("/api/projects/{project_id}/title")
+    async def rename(project_id: int, body: TitleIn, user: User) -> dict:
+        if not await store.rename_project(project_id, user, body.title):
+            raise HTTPException(status_code=404, detail=NOT_FOUND)
+        return _project_brief(await owned(project_id, user))
+
     @app.put("/api/projects/{project_id}/deal")
     async def set_deal(project_id: int, body: AmountIn, user: User) -> dict:
         if not await store.set_deal_amount(project_id, user, body.amount):

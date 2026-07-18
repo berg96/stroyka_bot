@@ -468,6 +468,15 @@ class Storage:
             await s.commit()
         return True
 
+    async def rename_project(self, project_id: int, tg_id: int, title: str) -> bool:
+        async with self.session() as s:
+            project = await s.get(Project, project_id)
+            if project is None or project.user_id != tg_id:
+                return False
+            project.title = title[:128]
+            await s.commit()
+        return True
+
     async def add_payment(
         self, project_id: int, tg_id: int, amount: float, comment: str = ""
     ) -> bool:

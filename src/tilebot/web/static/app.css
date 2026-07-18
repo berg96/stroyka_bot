@@ -343,3 +343,11 @@ input:focus { outline: none; border-color: var(--accent); }
   border-radius: 0 0 var(--r) var(--r); padding: 2px 12px 8px; background: var(--surface);
 }
 .tuning-body .field:first-child { margin-top: 8px; }
+
+/* переименование объекта */
+.top h1 { cursor: text; }
+.title-input {
+  flex: 1; min-width: 0; font: 700 20px inherit; letter-spacing: -.01em;
+  padding: 4px 8px; border: 1px solid var(--accent); border-radius: 8px;
+  background: var(--surface); color: var(--text);
+}

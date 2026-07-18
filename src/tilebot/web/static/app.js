@@ -204,7 +204,7 @@ function screenCanvas() {
     <div class="screen">
       <div class="top">
         <button class="icon-btn" id="back">${icon('back')}</button>
-        <h1>${esc(p.title)}</h1>
+        <h1 id="title" title="Переименовать">${esc(p.title)}</h1>
         <button class="icon-btn" id="menu" aria-label="Ещё">${icon('doc')}</button>
       </div>
 
@@ -270,6 +270,8 @@ function screenCanvas() {
   const adv = box.querySelector('#advice');
   r.advice.forEach((a) => adv.append(h(`<div class="advice">${icon('bulb', 'ic')}<span>${esc(a)}</span></div>`)));
 
+  const titleEl = box.querySelector('#title');
+  titleEl.onclick = () => editTitle(titleEl, p);
   box.querySelector('#back').onclick = () => loadList();
   box.querySelector('#buy').onclick = () => go('buy');
   box.querySelector('#menu').onclick = () => go('buy');
@@ -279,6 +281,24 @@ function screenCanvas() {
   box.querySelector('#add').onclick = () => { tg?.showAlert?.('Добавление поверхности — в следующем шаге.'); };
   void s;
   return box;
+}
+
+/** Переименование объекта: тап по названию → инпут → PUT. */
+function editTitle(el, p) {
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.className = 'title-input'; inp.value = p.title; inp.maxLength = 128;
+  el.replaceWith(inp); inp.focus(); inp.select();
+  let done = false;
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') inp.blur();
+    if (e.key === 'Escape') { done = true; render(); }
+  });
+  inp.addEventListener('blur', () => run(async () => {
+    if (done) return; done = true;
+    const t = inp.value.trim();
+    if (!t || t === p.title) { render(); return; }
+    Object.assign(state.project, await api(`/api/projects/${p.id}/title`, {method: 'PUT', body: {title: t}}));
+  }));
 }
 
 const packs = (r) => {
@@ -515,8 +535,13 @@ function screenMoney() {
     </div>`);
   const pays = box.querySelector('#pays');
   p.payments.forEach((x) => pays.append(h(`<div class="line"><div class="grow"><div>${esc(x.comment || 'платёж')}</div><div class="qty">${esc(x.at.slice(0, 10))}</div></div><div class="q num">${money(x.amount)}</div></div>`)));
-  box.querySelector('#save-deal').onclick = () => run(async () => { const a = parseFloat(box.querySelector('#deal').value || '0'); Object.assign(state.project, await api(`/api/projects/${p.id}/deal`, {method: 'PUT', body: {amount: a}})); });
-  box.querySelector('#add-pay').onclick = () => run(async () => { const a = parseFloat(box.querySelector('#pay').value || '0'); if (!(a > 0)) throw new Error('Сумма прихода — больше нуля.'); Object.assign(state.project, await api(`/api/projects/${p.id}/payments`, {method: 'POST', body: {amount: a, comment: box.querySelector('#comment').value}})); });
+  // Ссылки на инпуты берём СЕЙЧАС: box — это DocumentFragment, после render() он
+  // вставится в DOM и опустеет, и box.querySelector в клике вернул бы null.
+  const dealInp = box.querySelector('#deal');
+  const payInp = box.querySelector('#pay');
+  const commentInp = box.querySelector('#comment');
+  box.querySelector('#save-deal').onclick = () => run(async () => { const a = parseFloat(dealInp.value || '0'); Object.assign(state.project, await api(`/api/projects/${p.id}/deal`, {method: 'PUT', body: {amount: a}})); });
+  box.querySelector('#add-pay').onclick = () => run(async () => { const a = parseFloat(payInp.value || '0'); if (!(a > 0)) throw new Error('Сумма прихода — больше нуля.'); Object.assign(state.project, await api(`/api/projects/${p.id}/payments`, {method: 'POST', body: {amount: a, comment: commentInp.value}})); });
   box.querySelector('#back').onclick = () => go('canvas');
   return box;
 }
@@ -531,7 +556,9 @@ function screenPrice() {
     <div class="dock"><button class="btn" id="save">Сохранить</button></div></div>`);
   const f = box.querySelector('#f');
   PRICE_FIELDS.forEach(([k, l]) => f.append(h(`<label class="field"><span class="lab">${l}</span><input type="number" inputmode="decimal" data-k="${k}" value="${state.price[k]}"></label>`)));
-  box.querySelector('#save').onclick = () => run(async () => { const body = {}; box.querySelectorAll('input[data-k]').forEach((i) => body[i.dataset.k] = parseFloat(i.value || '0')); state.price = await api('/api/price', {method: 'PUT', body}); tg?.HapticFeedback?.notificationOccurred('success'); state.screen = 'list'; state.projects = await api('/api/projects'); });
+  // f останется в DOM после render(), из него и читаем инпуты в клике (не из box —
+  // тот к моменту клика опустеет, будучи DocumentFragment).
+  box.querySelector('#save').onclick = () => run(async () => { const body = {}; f.querySelectorAll('input[data-k]').forEach((i) => body[i.dataset.k] = parseFloat(i.value || '0')); state.price = await api('/api/price', {method: 'PUT', body}); tg?.HapticFeedback?.notificationOccurred('success'); state.screen = 'list'; state.projects = await api('/api/projects'); });
   box.querySelector('#back').onclick = () => loadList();
   return box;
 }
