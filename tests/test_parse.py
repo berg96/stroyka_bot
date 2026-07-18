@@ -109,3 +109,23 @@ class TestPayments:
     def test_zero_payment_is_rejected(self):
         with pytest.raises(ParseError, match="больше нуля"):
             amount_and_comment("0 аванс")
+
+
+class TestTileDimensions:
+    """Баг v2: веб парсил «60 30» как 60×30 мм (плитка 6 см!) вместо 600×300.
+
+    Плитку мастер пишет в сантиметрах, а стены — в метрах: у плитки свой порог
+    (200), поэтому это отдельная функция, общая для бота и мини-аппа.
+    """
+
+    def test_centimetres_become_millimetres(self):
+        from tilebot.core.parse import tile_dimensions
+
+        assert tile_dimensions("60 30") == [600.0, 300.0]
+        assert tile_dimensions("120 60") == [1200.0, 600.0]
+
+    def test_millimetres_stay_millimetres(self):
+        from tilebot.core.parse import tile_dimensions
+
+        assert tile_dimensions("600x300") == [600.0, 300.0]
+        assert tile_dimensions("1200 600") == [1200.0, 600.0]

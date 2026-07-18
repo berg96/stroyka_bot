@@ -37,7 +37,7 @@ from tilebot.core.models import (
     SurfaceKind,
     Tile,
 )
-from tilebot.core.parse import ParseError, dimensions, meters
+from tilebot.core.parse import ParseError, dimensions, meters, tile_dimensions
 from tilebot.core.project import ProjectResult, compute_project
 from tilebot.core.room import MAX_HEIGHT_M, MIN_HEIGHT_M, floor_dims, room_surfaces
 from tilebot.core.units import fmt_mm
@@ -160,7 +160,7 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
                     )
                 values = [value]
             elif body.kind == "tile":
-                values = dimensions(body.text, count=2)
+                values = tile_dimensions(body.text)
             else:  # size — стена или пол: ширина и высота
                 values = [v / 1000 for v in dimensions(body.text, count=2)]
         except ParseError as e:
@@ -329,6 +329,8 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
             )
         if body.tile_price is not None:
             await store.set_tile_price(project_id, user, body.tile_price or None)
+        if body.joint_mm is not None:
+            await store.set_tile_joint(project_id, user, body.joint_mm)
 
         _, result = await computed(project_id, user)
         return _result_json(result)
@@ -647,6 +649,7 @@ class PatchIn(BaseModel):
     rotate: bool = False
     tile_size: TileSizeIn | None = None
     tile_price: float | None = Field(default=None, ge=0)
+    joint_mm: float | None = Field(default=None, ge=0, le=20)
 
 
 class MeasureIn(BaseModel):

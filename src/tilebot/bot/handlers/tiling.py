@@ -39,6 +39,7 @@ from tilebot.core.parse import (
     name_and_numbers,
     numbers,
     single_number,
+    tile_mm,
     to_mm,
 )
 from tilebot.core.project import ProjectResult, Savings, compute_project
@@ -258,13 +259,8 @@ async def got_tile_size(message: Message, state: FSMContext) -> None:
         await message.answer("Размер плитки должен быть больше нуля: <code>60 30</code>")
         return
 
-    await state.update_data(tile_w=_tile_mm(values[0]), tile_h=_tile_mm(values[1]))
+    await state.update_data(tile_w=tile_mm(values[0]), tile_h=tile_mm(values[1]))
     await _ask_joint(message, state)
-
-
-def _tile_mm(value: float) -> float:
-    """Плитку меряют в сантиметрах («шестьдесят на тридцать»), но пишут и в мм."""
-    return value * 10 if value < 200 else value
 
 
 async def _ask_joint(message: Message, state: FSMContext) -> None:
@@ -395,7 +391,7 @@ async def got_floor_tile(message: Message, state: FSMContext) -> None:
         await message.answer("Нужно два числа: <code>60 60</code>", reply_markup=kb.SAME_TILE)
         return
 
-    await state.update_data(floor_w=_tile_mm(values[0]), floor_h=_tile_mm(values[1]))
+    await state.update_data(floor_w=tile_mm(values[0]), floor_h=tile_mm(values[1]))
     await state.set_state(Tiling.floor_per_pack)
     await message.answer(
         "Штук в упаковке <b>напольной</b> плитки:\n\n<code>4</code>",
@@ -815,8 +811,8 @@ async def got_new_size(message: Message, state: FSMContext, storage: Storage) ->
     ok = await storage.set_tile_size(
         project_id,
         message.from_user.id,
-        _tile_mm(values[0]),
-        _tile_mm(values[1]),
+        tile_mm(values[0]),
+        tile_mm(values[1]),
         kind=kind,
     )
     if not ok:

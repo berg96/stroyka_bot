@@ -57,6 +57,26 @@ def dimensions(text: str, count: int = 2) -> list[float]:
     return [to_mm(v) for v in _positive(values)]
 
 
+TILE_CM_THRESHOLD = 200.0
+
+
+def tile_mm(value: float) -> float:
+    """Размер плитки → миллиметры. Плитку меряют в сантиметрах («шестьдесят на
+    тридцать»), но пишут и в мм: число меньше 200 — это сантиметры, иначе мм.
+
+    Порог свой, не как у стен (20): плиток 60 мм не бывает, а стен 60 см — да.
+    """
+    return value * 10 if value < TILE_CM_THRESHOLD else value
+
+
+def tile_dimensions(text: str) -> list[float]:
+    """Ровно два размера плитки в мм: «60 30» → [600, 300], «600x300» → [600, 300]."""
+    values = numbers(text)
+    if len(values) != 2:
+        raise ParseError(f"Нужно два числа: <code>60 30</code>, а вижу {len(values)}.")
+    return [tile_mm(v) for v in _positive(values)]
+
+
 def meters(text: str, count: int | None = None) -> list[float]:
     """Длины в метрах — для замеров комнаты рулеткой."""
     values = numbers(text)
