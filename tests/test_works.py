@@ -77,3 +77,35 @@ class TestPlumbing:
 
     def test_nothing_checked(self):
         assert plumbing([{"name": "Раковина", "price": 3500, "on": False}]).work_sum == 0
+
+
+class TestComputeWork:
+    """Диспетчер: замеры комнаты → результат нужного вида работ."""
+
+    M = {"walls": [2, 1.8, 2, 1.8], "height_m": 2.7, "floor_m2": 2.9}
+
+    def test_plaster_uses_wall_area(self):
+        from tilebot.core.works import compute_work, wall_area_m2
+        r = compute_work("plaster", {"surface": "walls", "layers": 1, "kg_per_m2": 1.2}, self.M, P)
+        assert r.work_lines[0].qty == round(wall_area_m2(self.M), 2)  # 7.6×2.7=20.52
+
+    def test_laminate_uses_floor(self):
+        from tilebot.core.works import compute_work
+        r = compute_work("laminate", {"pack_m2": 2.1, "waste": 0.05, "underlay": True}, self.M, P)
+        assert r.work_lines[0].qty == 2.9
+
+    def test_baseboard_perimeter_minus_deduct(self):
+        from tilebot.core.works import compute_work
+        r = compute_work("baseboard", {"plank_m": 2.5, "corners": 4, "deduct_m": 0.8}, self.M, P)
+        assert r.work_lines[0].qty == round(7.6 - 0.8, 2)  # 6.8
+
+    def test_manual_area_overrides_measures(self):
+        from tilebot.core.works import compute_work
+        r = compute_work("laminate", {"area_m2": 10, "pack_m2": 2.0, "waste": 0.1}, self.M, P)
+        assert r.work_lines[0].qty == 10
+
+    def test_default_input_prefilled(self):
+        from tilebot.core.works import default_input
+        assert default_input("laminate", self.M)["underlay"] is True
+        assert len(default_input("plumbing", self.M)["points"]) >= 6
+        assert default_input("baseboard", self.M)["corners"] == 4  # по числу стен

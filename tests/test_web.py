@@ -310,3 +310,53 @@ class TestProjects:
         room = await _room_via_api(api)
         assert (await api.delete(f"/api/projects/{room['id']}")).status_code == 200
         assert (await api.get(f"/api/projects/{room['id']}")).status_code == 404
+
+
+class TestWorks:
+    """Объект = замеры + несколько работ (расширение 18.07)."""
+
+    async def test_object_has_measures_and_tile_work(self, api):
+        room = await _room_via_api(api)
+        obj = (await api.get(f"/api/objects/{room['id']}")).json()
+        assert obj["measures"]["walls"]  # замеры сохранились из комнаты
+        assert any(w["kind"] == "tile" for w in obj["works"])  # плитка как работа
+
+    async def test_add_edit_delete_work(self, api):
+        room = await _room_via_api(api)
+        w = (await api.post(f"/api/objects/{room['id']}/works", json={"kind": "laminate"})).json()
+        assert w["kind"] == "laminate" and w["work_sum"] > 0  # взял пол из замеров
+        assert any(m["name"] == "Подложка" for m in w["materials"])
+
+        obj = (await api.get(f"/api/objects/{room['id']}")).json()
+        assert len(obj["works"]) == 2 and obj["total"] > 0
+
+        w2 = (await api.patch(f"/api/objects/{room['id']}/works/{w['id']}",
+                              json={"input": {"underlay": False}})).json()
+        assert not any(m["name"] == "Подложка" for m in w2["materials"])
+
+        assert (await api.delete(f"/api/objects/{room['id']}/works/{w['id']}")).status_code == 200
+        obj2 = (await api.get(f"/api/objects/{room['id']}")).json()
+        assert len(obj2["works"]) == 1  # снова только плитка
+
+    async def test_plumbing_points_sum(self, api):
+        room = await _room_via_api(api)
+        w = (await api.post(f"/api/objects/{room['id']}/works", json={"kind": "plumbing"})).json()
+        assert w["work_sum"] == 0  # по умолчанию ничего не выбрано
+        pts = w["input"]["points"]
+        pts[0]["on"] = True
+        w2 = (await api.patch(f"/api/objects/{room['id']}/works/{w['id']}",
+                              json={"input": {"points": pts}})).json()
+        assert w2["work_sum"] == pts[0]["price"]
+
+    async def test_unknown_kind_rejected(self, api):
+        room = await _room_via_api(api)
+        r = await api.post(f"/api/objects/{room['id']}/works", json={"kind": "магия"})
+        assert r.status_code == 422
+
+    async def test_someone_elses_work_not_found(self, api):
+        room = await _room_via_api(api)
+        w = (await api.post(f"/api/objects/{room['id']}/works", json={"kind": "laminate"})).json()
+        stranger = init_data(user_id=999)
+        r = await api.patch(f"/api/objects/{room['id']}/works/{w['id']}",
+                            json={"input": {}}, headers={"X-Init-Data": stranger})
+        assert r.status_code == 404

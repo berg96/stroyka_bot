@@ -41,6 +41,12 @@ from tilebot.core.parse import ParseError, dimensions, meters, tile_dimensions
 from tilebot.core.project import ProjectResult, compute_project
 from tilebot.core.room import MAX_HEIGHT_M, MIN_HEIGHT_M, floor_dims, room_surfaces
 from tilebot.core.units import fmt_mm
+from tilebot.core.works import (
+    WORK_NAME,
+    WorkKind,
+    compute_work,
+    default_input,
+)
 from tilebot.core.wrap import supports_wrap
 from tilebot.render.scheme import render_layout
 from tilebot.storage import Project, Storage, payload_to_surface, surface_to_payload
@@ -177,6 +183,14 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
                 "Померь пол отдельной поверхностью.",
             )
         surfaces = room_surfaces(body.walls_m, body.height_m, with_floor=body.with_floor)
+        # Замеры комнаты — на уровень объекта: их переиспользуют другие виды работ
+        # (ламинат берёт пол, штукатурка — стены, плинтус — периметр).
+        dims = floor_dims(body.walls_m) if body.with_floor else None
+        floor_m2 = round(dims[0] * dims[1], 2) if dims else 0.0
+        await store.set_measures(
+            project_id, user,
+            {"walls": body.walls_m, "height_m": body.height_m, "floor_m2": floor_m2},
+        )
         return await _save_and_compute(project_id, user, surfaces, body)
 
     @app.post("/api/projects/{project_id}/surface", status_code=201)
@@ -334,6 +348,107 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
 
         _, result = await computed(project_id, user)
         return _result_json(result)
+
+    # --- виды работ (объект = замеры + несколько работ) -----------------------
+
+    async def _object_measures(project: Project) -> dict:
+        """Замеры объекта; для старых объектов (до колонки) — вывести из плитки."""
+        m = project.measures
+        if m.get("walls") or m.get("floor_m2"):
+            return m
+        if not project.surfaces:
+            return {}
+        walls, height, floor = [], 0.0, 0.0
+        for row in project.surfaces:
+            s = payload_to_surface(row.dump()).surface
+            if s.kind is SurfaceKind.WALL:
+                walls.append(round(s.width_mm / 1000, 3))
+                height = round(s.height_mm / 1000, 3)
+            else:
+                floor = round(s.gross_area_m2, 2)
+        return {"walls": walls, "height_m": height, "floor_m2": floor}
+
+    async def _object_json(project: Project, user_id: int) -> dict:
+        measures = await _object_measures(project)
+        record = await store.get_or_create_user(user_id)
+        works = []
+        # Плитка — синтетическая работа из существующих поверхностей (ядро плитки).
+        if project.surfaces:
+            res = compute_project([payload_to_surface(r.dump()) for r in project.surfaces])
+            est = build_estimate(
+                project.title, res.layouts, res.materials, record.price,
+                include_materials_cost=False,
+            )
+            works.append({
+                "id": "tile", "kind": "tile", "name": "Плитка", "input": {},
+                "hero_value": f"{res.area_m2:.2f} м²", "hero_note": f"{res.tiles_grid} плиток",
+                "work_sum": est.works_total,
+            })
+        # Остальные работы — из WorkRow.
+        for w in project.works:
+            r = compute_work(w.kind, w.dump(), measures, record.price)
+            works.append({
+                "id": w.id, "kind": w.kind, "name": WORK_NAME.get(w.kind, w.kind),
+                "input": w.dump(), "hero_value": r.hero_value, "hero_note": r.hero_note,
+                "work_sum": r.work_sum,
+            })
+        return {
+            **_project_brief(project),
+            "measures": measures,
+            "works": works,
+            "total": sum(w["work_sum"] for w in works),
+        }
+
+    def _work_detail(w, measures: dict, price: PriceList) -> dict:
+        r = compute_work(w.kind, w.dump(), measures, price)
+        return {
+            "id": w.id, "kind": w.kind, "name": WORK_NAME.get(w.kind, w.kind),
+            "input": w.dump(), "hero_value": r.hero_value, "hero_note": r.hero_note,
+            "work_sum": r.work_sum,
+            "work_lines": [
+                {"name": ln.name, "qty": ln.qty, "unit": ln.unit,
+                 "total": ln.total, "total_text": money(ln.total)}
+                for ln in r.work_lines
+            ],
+            "materials": [
+                {"name": m.name, "qty_text": m.format_qty(), "unit": m.unit, "note": m.note}
+                for m in r.materials
+            ],
+        }
+
+    @app.get("/api/objects/{project_id}")
+    async def get_object(project_id: int, user: User) -> dict:
+        return await _object_json(await owned(project_id, user), user)
+
+    @app.post("/api/objects/{project_id}/works", status_code=201)
+    async def add_work(project_id: int, body: WorkCreateIn, user: User) -> dict:
+        project = await owned(project_id, user)
+        if body.kind not in {k.value for k in WorkKind} or body.kind == "tile":
+            raise HTTPException(status_code=422, detail="Неизвестный вид работ.")
+        measures = await _object_measures(project)
+        wid = await store.add_work(project_id, user, body.kind, default_input(body.kind, measures))
+        if wid is None:
+            raise HTTPException(status_code=404, detail=NOT_FOUND)
+        work = await store.get_work(wid, user)
+        return _work_detail(work, measures, (await store.get_or_create_user(user)).price)
+
+    @app.patch("/api/objects/{project_id}/works/{work_id}")
+    async def patch_work(project_id: int, work_id: int, body: WorkPatchIn, user: User) -> dict:
+        work = await store.get_work(work_id, user)
+        if work is None or work.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Работа не найдена.")
+        merged = {**work.dump(), **body.input}
+        await store.update_work(work_id, user, merged)
+        project = await owned(project_id, user)
+        fresh = await store.get_work(work_id, user)
+        return _work_detail(fresh, await _object_measures(project),
+                            (await store.get_or_create_user(user)).price)
+
+    @app.delete("/api/objects/{project_id}/works/{work_id}")
+    async def delete_work(project_id: int, work_id: int, user: User) -> dict:
+        if not await store.delete_work(work_id, user):
+            raise HTTPException(status_code=404, detail="Работа не найдена.")
+        return {"ok": True}
 
     # --- схемы ----------------------------------------------------------------
 
@@ -656,6 +771,15 @@ class PatchIn(BaseModel):
     tile_size: TileSizeIn | None = None
     tile_price: float | None = Field(default=None, ge=0)
     joint_mm: float | None = Field(default=None, ge=0, le=20)
+
+
+class WorkCreateIn(BaseModel):
+    kind: str  # plaster/laminate/baseboard/reveals/plumbing
+
+
+class WorkPatchIn(BaseModel):
+    # Правка полей ввода работы — сливается в существующий input и пересчитывается.
+    input: dict = Field(default_factory=dict)
 
 
 class MeasureIn(BaseModel):

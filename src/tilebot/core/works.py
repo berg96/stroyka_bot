@@ -199,3 +199,73 @@ def plumbing(points: list[dict]) -> WorkResult:
         hero_value=f"{len(chosen)} точ." if chosen else "0 точек",
         hero_note="≈",
     )
+
+
+# --- Геометрия из замеров комнаты и диспетчер --------------------------------
+#
+# Замеры: {"walls": [длины, м], "height_m": .., "floor_m2": ..}. Каждый вид работ
+# берёт нужное: штукатурка — площадь стен, ламинат — пол, плинтус — периметр.
+
+
+def wall_area_m2(m: dict) -> float:
+    return sum(m.get("walls") or []) * (m.get("height_m") or 0)
+
+
+def floor_area_m2(m: dict) -> float:
+    return m.get("floor_m2") or 0.0
+
+
+def perimeter_m(m: dict) -> float:
+    return sum(m.get("walls") or [])
+
+
+def default_input(kind: str, measures: dict) -> dict:
+    """Дефолты новой работы — чтобы открывалась уже посчитанной («бот думает»)."""
+    if kind == WorkKind.PLASTER:
+        return {"surface": "walls", "layers": 1, "kg_per_m2": 1.2}
+    if kind == WorkKind.LAMINATE:
+        return {"pack_m2": 2.1, "waste": 0.05, "underlay": True}
+    if kind == WorkKind.BASEBOARD:
+        return {"plank_m": 2.5, "corners": len(measures.get("walls") or []) or 4, "deduct_m": 0.8}
+    if kind == WorkKind.REVEALS:
+        return {"openings": [], "reveal_width_cm": 25}
+    if kind == WorkKind.PLUMBING:
+        return {"points": [{"name": n, "price": p, "on": False} for n, p in PLUMBING_POINTS]}
+    return {}
+
+
+def compute_work(kind: str, inp: dict, measures: dict, price: PriceList) -> WorkResult:
+    """Посчитать работу: её вход + замеры комнаты → результат нужным калькулятором.
+
+    Пустое `area_m2`/`perimeter_m` во входе = «взять из замеров»; заданное — мастер
+    переопределил вручную.
+    """
+    if kind == WorkKind.PLASTER:
+        area = inp.get("area_m2")
+        if area is None:
+            area = wall_area_m2(measures) if inp.get("surface", "walls") == "walls" else 0.0
+        return plaster(area, layers=int(inp.get("layers", 1)),
+                       kg_per_m2=float(inp.get("kg_per_m2", 1.2)), price=price)
+    if kind == WorkKind.LAMINATE:
+        area = inp.get("area_m2")
+        if area is None:
+            area = floor_area_m2(measures)
+        return laminate(area, pack_m2=float(inp.get("pack_m2", 2.1)),
+                        waste=float(inp.get("waste", 0.05)),
+                        underlay=bool(inp.get("underlay", True)), price=price)
+    if kind == WorkKind.BASEBOARD:
+        per = inp.get("perimeter_m")
+        if per is None:
+            per = max(0.0, perimeter_m(measures) - float(inp.get("deduct_m", 0)))
+        return baseboard(per, plank_m=float(inp.get("plank_m", 2.5)),
+                         corners=int(inp.get("corners", 4)), price=price)
+    if kind == WorkKind.REVEALS:
+        ops = [
+            Opening(o.get("name", "Проём"), float(o.get("width_m", 0)),
+                    float(o.get("height_m", 0)), bool(o.get("is_door", False)))
+            for o in inp.get("openings", [])
+        ]
+        return reveals(ops, reveal_width_cm=float(inp.get("reveal_width_cm", 25)), price=price)
+    if kind == WorkKind.PLUMBING:
+        return plumbing(inp.get("points", []))
+    raise ValueError(f"неизвестный вид работ: {kind}")
