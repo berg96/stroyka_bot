@@ -37,6 +37,19 @@ const laminateWork = (underlay = true) => ({
     : [{name: 'Ламинат', qty_text: '2', unit: 'пачек', note: ''}],
 });
 
+// Сантехника: точки с ценой и вкл/выкл; сумма = сумма включённых. Как бэкенд.
+const PLUMB_POINTS = [{name: 'Раковина', price: 3500, on: false}, {name: 'Унитаз', price: 3000, on: false}];
+const plumbingWork = (points = PLUMB_POINTS) => {
+  const on = points.filter((p) => p.on);
+  const sum = on.reduce((s, p) => s + p.price, 0);
+  return {
+    id: 11, kind: 'plumbing', name: 'Сантехника', input: {points},
+    hero_value: `${on.length} точ.`, hero_note: '≈', work_sum: sum,
+    work_lines: on.map((p) => ({name: `Сантехника: ${p.name}`, qty: 1, unit: '', total: p.price, total_text: `${p.price} ₽`})),
+    materials: [],
+  };
+};
+
 function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
   const calls = [];
   const dom = new JSDOM(`<!doctype html><body><div id="app"></div></body>`, {runScripts: 'outside-only', url: 'https://plitka.example/'});
@@ -75,10 +88,12 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
                   {name: 'Ламинат', qty_text: '2', unit: 'пачек', cost: 1800}],
       materials_total: 0, rough_materials_total: 37200, rough_total: 63564, rough_total_text: '63 564 ₽',
       grand_total: 63564, grand_total_text: '63 564 ₽', note: ''})};
-    if (/\/api\/objects\/1\/works$/.test(url) && m === 'POST') return {ok: true, status: 201, json: async () => laminateWork()};
+    if (/\/api\/objects\/1\/works$/.test(url) && m === 'POST')
+      return {ok: true, status: 201, json: async () => (body.kind === 'plumbing' ? plumbingWork() : laminateWork())};
     if (/\/api\/objects\/1\/works\/10$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => laminateWork()};
     if (/\/api\/objects\/1\/works\/10$/.test(url) && m === 'PATCH') return {ok: true, status: 200, json: async () => laminateWork(body.input.underlay !== false)};
     if (/\/api\/objects\/1\/works\/10$/.test(url) && m === 'DELETE') return {ok: true, status: 200, json: async () => ({ok: true})};
+    if (/\/api\/objects\/1\/works\/11$/.test(url) && m === 'PATCH') return {ok: true, status: 200, json: async () => plumbingWork(body.input.points)};
     if (/\/api\/projects$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => [PROJECT]};
     if (/\/api\/projects\/1$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => PROJECT};
     if (/\/api\/projects\/1$/.test(url) && m === 'PATCH') {
@@ -194,6 +209,30 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   cw.w.confirm = () => true;
   cw.w.document.querySelector('#del').click(); await wait(120);
   check('работа удалена (DELETE) → вернулись на хаб', cw.calls.some((c) => /\/works\/10$/.test(c.url) && c.m === 'DELETE') && cw.w.document.body.textContent.includes('Работы'));
+
+  console.log('\nСантехника: переключатель точки загорается и шлёт workPatch');
+  const cp = makeApp();
+  await wait();
+  byText(cp.w, '.tile-row', 'Ванная').click(); await wait(80);
+  byText(cp.w, '.btn', 'Добавить работу').click(); await wait(50);
+  byText(cp.w, '.tile-row', 'Сантехника').click(); await wait(120);
+  check('экран сантехники: точки с переключателями', cp.w.document.querySelectorAll('#input .spec-row .toggle').length >= 2);
+  const firstToggle = cp.w.document.querySelector('#input .spec-row .toggle');
+  check('переключатель сначала выключен', !firstToggle.classList.contains('on'));
+  firstToggle.click();
+  await wait(200);
+  // главный баг Сани/Артёма: кнопка должна ЗАГОРЕТЬСЯ сразу (оптимистично)
+  check('переключатель ЗАГОРЕЛСЯ после клика', firstToggle.classList.contains('on'),
+    'кнопка не получила класс .on — «переключатель не включался»');
+  check('клик ушёл PATCH с points[0].on=true', cp.calls.some((c) => /\/works\/11$/.test(c.url) && c.m === 'PATCH' && c.body?.input?.points?.[0]?.on === true),
+    'на сервер не ушёл включённый набор');
+  check('сумма работы обновилась (не 0)', byText(cp.w, '.result .big', '3 500') || byText(cp.w, '#w-hero', '3 500'),
+    'work_sum не отобразился — «не добавлялось к сумме»');
+  // второй переключатель не должен гасить первый (устаревшее состояние)
+  const toggles = cp.w.document.querySelectorAll('#input .spec-row .toggle');
+  if (toggles[1]) { toggles[1].click(); await wait(200); }
+  check('второй клик НЕ сбросил первый', cp.calls.filter((c) => /\/works\/11$/.test(c.url) && c.m === 'PATCH').pop()?.body?.input?.points?.[0]?.on === true,
+    'клик по второй точке затёр первую — устаревшее замыкание');
 
   console.log('\nВалидация под полем (не общей плашкой)');
   const c3 = makeApp();

@@ -467,18 +467,26 @@ function revealsOpenings(el, openings) {
 }
 
 function plumbingPoints(el, points) {
-  points.forEach((p, idx) => {
+  // Локальная мутабельная копия: точечный workPatch НЕ перерисовывает панель ввода,
+  // поэтому контрол держит своё состояние сам (как toggleRow/valueRow). Раньше клик
+  // считал next от исходного `points` и не менял вид кнопки — переключатель не
+  // загорался, а соседние клики затирали друг друга (слали устаревший набор).
+  const list = points.map((p) => ({...p}));
+  list.forEach((p) => {
     const row = h(`<div class="spec-row">
       <button class="toggle ${p.on ? 'on' : ''}"></button>
       <span class="lab">${esc(p.name)}</span>
       <input class="cur-input" inputmode="numeric" value="${p.price}" style="width:84px">
     </div>`).firstElementChild;
-    row.querySelector('.toggle').onclick = () => {
-      const next = points.slice(); next[idx] = {...p, on: !p.on}; workPatch({points: next});
+    const btn = row.querySelector('.toggle');
+    btn.onclick = () => {
+      p.on = !p.on;
+      btn.classList.toggle('on', p.on);  // оптимистично, как toggleRow
+      workPatch({points: list});
     };
     row.querySelector('input').onchange = (e) => {
-      const n = parseFloat(e.target.value) || 0;
-      const next = points.slice(); next[idx] = {...p, price: n}; workPatch({points: next});
+      p.price = parseFloat(e.target.value) || 0;
+      workPatch({points: list});
     };
     el.append(row);
   });
