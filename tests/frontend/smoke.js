@@ -72,7 +72,13 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
       return {ok: true, status: 200, json: async () => ({values: conv})};
     }
     if (/\/api\/projects$/.test(url) && m === 'POST') return {ok: true, status: 201, json: async () => ({id: 1, title: body.title})};
-    if (/\/api\/projects\/1\/(room|surface)$/.test(url)) return {ok: true, status: 201, json: async () => baseResult()};
+    if (/\/api\/projects\/1\/(room|surface)$/.test(url)) {
+      // «замерь комнату» без плитки → тело без tile → {ok:true}; иначе результат раскладки
+      return body && body.tile == null
+        ? {ok: true, status: 201, json: async () => ({ok: true})}
+        : {ok: true, status: 201, json: async () => baseResult()};
+    }
+    if (/\/api\/projects\/1\/tile$/.test(url) && m === 'POST') return {ok: true, status: 201, json: async () => baseResult()};
     if (/\/deal$/.test(url)) return {ok: true, status: 200, json: async () => ({...PROJECT, deal_amount: body.amount, due: body.amount})};
     if (/\/payments$/.test(url)) return {ok: true, status: 201, json: async () => ({...PROJECT, paid: body.amount, due: 0, payments: [{amount: body.amount, comment: body.comment, at: '2026-07-18T03:00:00'}]})};
     if (/\/title$/.test(url)) return {ok: true, status: 200, json: async () => ({...PROJECT, title: body.title})};
@@ -292,6 +298,55 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   check('смета: обе работы (плитка+ламинат)', ce.w.document.body.textContent.includes('Укладка плитки') && ce.w.document.body.textContent.includes('Укладка ламината'));
   check('смета: общий итог', ce.w.document.body.textContent.includes('63 564'));
   check('смета: материалы обоих видов', ce.w.document.body.textContent.includes('Плитка 600×300') && ce.w.document.body.textContent.includes('Ламинат'));
+
+  console.log('\nСоздание без плитки — «замерь комнату» (Саню звали не на плитку)');
+  const cm = makeApp();
+  await wait();
+  byText(cm.w, '.btn', 'Новый объект').click(); await wait(50);
+  // выключаем «Посчитать плитку сейчас» → поле плитки и кнопка меняются
+  const tileToggle = byText(cm.w, '.spec-row', 'Посчитать плитку сейчас')?.querySelector('.toggle');
+  check('тумблер «Посчитать плитку сейчас» есть и включён', tileToggle && tileToggle.classList.contains('on'));
+  tileToggle.click(); await wait(50);
+  check('поле «Плитка» скрылось при выключенном тумблере',
+    !byText(cm.w, '.field .lab', 'Плитка, см'), 'плитка не должна спрашиваться');
+  check('кнопка стала «Замерить»', !!byText(cm.w, '.btn', 'Замерить'));
+  const setCm = (i, val) => { const el = [...cm.w.document.querySelectorAll('#form input')][i]; el.value = val; el.dispatchEvent(new cm.w.Event('input')); };
+  setCm(0, 'Ламинат тест'); setCm(1, '2 1.8 2 1.8'); setCm(2, '2.7');
+  byText(cm.w, '.btn', 'Замерить').click(); await wait(150);
+  const roomCall = cm.calls.find((c) => /\/room$/.test(c.url) && c.m === 'POST');
+  check('POST /room ушёл БЕЗ плитки', roomCall && roomCall.body.tile == null,
+    'в теле не должно быть tile при выключенном тумблере');
+  check('перешёл на хаб объекта', cm.w.document.body.textContent.includes('Работы'));
+
+  console.log('\nПлитка как работа: хаб без плитки → «+ работа → Плитка» → холст');
+  const ct = makeApp();
+  // объект без плитки: works пуст, has_tile=false (Саню позвали на ламинат, потом добавил плитку)
+  ct.w.fetch = ((orig) => async (url, o = {}) => {
+    if (/\/api\/objects\/1$/.test(url) && (o.method || 'GET') === 'GET') {
+      return {ok: true, status: 200, json: async () => ({
+        id: 1, title: 'Ванная, Борзова', measures: {walls: [2, 1.8, 2, 1.8], height_m: 2.7, floor_m2: 2.9},
+        works: [], has_tile: false, total: 0, deal_amount: 0, paid: 0, due: 0, payments: [],
+      })};
+    }
+    return orig(url, o);
+  })(ct.w.fetch);
+  await wait();
+  byText(ct.w, '.tile-row', 'Ванная').click(); await wait(80);
+  check('хаб без плитки: список работ пуст', !byText(ct.w, '.tile-row', 'Плитка'));
+  byText(ct.w, '.btn', 'Добавить работу').click(); await wait(50);
+  byText(ct.w, '.tile-row', 'Плитка').click(); await wait(60);
+  check('открылся экран параметров плитки (не алерт)',
+    !!byText(ct.w, '.field .lab', 'Плитка, см') && !!byText(ct.w, '.btn', 'Посчитать плитку'),
+    'клик по «Плитка» без плитки должен вести на экран параметров');
+  const setCt = (val) => { const el = ct.w.document.querySelector('#form input'); el.value = val; el.dispatchEvent(new ct.w.Event('input')); };
+  setCt('60 30');
+  byText(ct.w, '.btn', 'Посчитать плитку').click(); await wait(150);
+  check('POST /tile ушёл с плиткой', ct.calls.some((c) => /\/tile$/.test(c.url) && c.m === 'POST' && c.body?.tile?.width_mm === 600),
+    'плитка не отправилась на /tile');
+  check('перешёл на холст плитки (раскладка + закупка)',
+    ct.w.document.body.textContent.includes('плиток') && ct.w.document.body.textContent.includes('Список закупки') &&
+    ct.calls.some((c) => /scheme\/0\.png/.test(c.url)),
+    'после /tile ждал холст плитки');
 
   console.log('\nВне Telegram (пустой initData)');
   const out = makeApp({initData: ''});

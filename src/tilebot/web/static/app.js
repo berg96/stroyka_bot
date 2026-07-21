@@ -304,7 +304,11 @@ function screenAddWork() {
         <span class="sub">${esc(exists ? 'уже добавлена — открыть' : sub)}</span></span>
       ${icon('chevron', 'ic chev')}</button>`);
     card.querySelector('button').onclick = () => {
-      if (kind === 'tile') { has.has('tile') ? openTile() : tg?.showAlert?.('Плитка добавляется при создании объекта (замеры комнаты).'); return; }
+      if (kind === 'tile') {
+        if (has.has('tile')) openTile();
+        else { state.tiledraft = null; go('addtile'); }  // плитка работой поверх замеров
+        return;
+      }
       addWork(kind);
     };
     types.append(card);
@@ -918,6 +922,19 @@ function screenPrice() {
 
 const PATTERN_RU = {straight: 'шов в шов', brick: 'вразбежку', diagonal: 'диагональ', herringbone: 'ёлочка'};
 
+/** Текстовое поле черновика: пишет в d[key], ошибку берёт из d.errors[key].
+ * Общий для экрана создания и экрана добавления плитки — разбор один. */
+function textField(form, d, label, key, ph, help, numeric = true) {
+  const bad = d.errors?.[key];
+  const f = h(`<label class="field"><span class="lab">${esc(label)}</span>
+    <input type="text" ${numeric ? 'inputmode="decimal"' : ''} class="${bad ? 'bad' : ''}" placeholder="${esc(ph)}" value="${esc(d[key] || '')}">
+    ${help ? `<span class="help">${esc(help)}</span>` : ''}
+    ${bad ? `<span class="err">${esc(bad)}</span>` : ''}</label>`).firstElementChild;
+  const inp = f.querySelector('input');
+  inp.oninput = () => { d[key] = inp.value; };
+  form.append(f);
+}
+
 /** Быстрый ввод — ОДИН экран (как в макете), а не 12 шагов. Тонкая настройка
  * свёрнута и уже проставлена. Валидация — под полем, не общей плашкой. */
 function screenCreate() {
@@ -927,26 +944,23 @@ function screenCreate() {
   d.errors = d.errors || {};
   d.adv = d.adv || false;
   d.tuning = d.tuning || {
-    with_floor: false, joint_mm: 2, thickness_mm: 9, per_pack: null,
+    with_tile: true, with_floor: false, joint_mm: 2, thickness_mm: 9, per_pack: null,
     pattern: 'straight', start_from: 'auto', waste: 7, waterproofing: false,
   };
+
+  const tn = d.tuning;
+  // Плитку в режиме комнаты можно отложить: Саню зовут и не на плитку (ламинат,
+  // штукатурка). Тогда создание = «замерь комнату», плитку добавят работой.
+  const withTile = d.mode === 'single' || tn.with_tile;
 
   const box = h(`<div class="screen">
     <div class="top"><button class="icon-btn" id="back">${icon('back')}</button><h1>Новый объект</h1></div>
     <div id="form"></div>
-    <div class="dock"><button class="btn" id="calc">Посчитать</button></div>
+    <div class="dock"><button class="btn" id="calc">${withTile ? 'Посчитать' : 'Замерить'}</button></div>
   </div>`);
   const form = box.querySelector('#form');
-
-  const field = (label, key, ph, help, numeric = true) => {
-    const f = h(`<label class="field"><span class="lab">${esc(label)}</span>
-      <input type="text" ${numeric ? 'inputmode="decimal"' : ''} class="${d.errors[key] ? 'bad' : ''}" placeholder="${esc(ph)}" value="${esc(d[key] || '')}">
-      ${help ? `<span class="help">${esc(help)}</span>` : ''}
-      ${d.errors[key] ? `<span class="err">${esc(d.errors[key])}</span>` : ''}</label>`).firstElementChild;
-    const inp = f.querySelector('input');
-    inp.oninput = () => { d[key] = inp.value; };
-    form.append(f);
-  };
+  const field = (label, key, ph, help, numeric = true) =>
+    textField(form, d, label, key, ph, help, numeric);
 
   field('Название объекта', 'title', 'Ванная, Борзова', '', false);
 
@@ -957,14 +971,18 @@ function screenCreate() {
   if (d.mode === 'room') {
     field('Стены по кругу, м', 'wallsText', '2 1.8 2 1.8', 'по часовой, через пробел — как мерил');
     field('Высота, м', 'heightText', '2.7');
+    toggleRow(form, 'grid', 'Посчитать плитку сейчас', tn.with_tile, (v) => { tn.with_tile = v; render(); });
   } else {
     blockRow(form, 'grid', 'Что меряем', seg([['Стена', 'wall'], ['Пол', 'floor']], d.kind,
       (v) => { d.kind = v; render(); }));
     field('Размер, м', 'sizeText', '2 2.7', 'ширина и высота');
   }
-  field('Плитка, см', 'tileText', '60 30', 'можно в см (60 30) или мм (600 300)');
-
-  buildTuning(form, d);
+  if (withTile) {
+    field('Плитка, см', 'tileText', '60 30', 'можно в см (60 30) или мм (600 300)');
+    buildTuning(form, d);
+  } else {
+    form.append(h(`<div class="hint" style="padding:6px 2px">Плитку добавишь работой на хабе объекта — «+ работа → Плитка».</div>`));
+  }
 
   box.querySelector('#calc').onclick = () => run(() => createProject(d));
   box.querySelector('#back').onclick = () => { state.draft = null; loadList(); };
@@ -1009,8 +1027,11 @@ async function createProject(d) {
   d.errors = {};
   if (!(d.title || '').trim()) { d.errors.title = 'Напиши название объекта.'; render(); return; }
 
-  let walls, height, size;
-  const tile = await parseField(d.tileText, 'tile', 'tileText', d);
+  const tn = d.tuning;
+  const withTile = d.mode === 'single' || tn.with_tile;
+
+  let walls, height, size, tile;
+  if (withTile) tile = await parseField(d.tileText, 'tile', 'tileText', d);
   if (d.mode === 'room') {
     walls = await parseField(d.wallsText, 'walls', 'wallsText', d);
     height = await parseField(d.heightText, 'height', 'heightText', d);
@@ -1019,15 +1040,15 @@ async function createProject(d) {
   }
   if (Object.keys(d.errors).length) { render(); return; }
 
-  const tn = d.tuning;
-  const common = {
+  const common = withTile ? {
     tile: {width_mm: tile[0], height_mm: tile[1], joint_mm: tn.joint_mm, thickness_mm: tn.thickness_mm, per_pack: tn.per_pack},
     pattern: tn.pattern, start_from: tn.start_from, waste: tn.waste / 100, waterproofing: tn.waterproofing,
-  };
+  } : {};
   const pr = await api('/api/projects', {method: 'POST', body: {title: d.title.trim()}});
   try {
     if (d.mode === 'room') {
-      await api(`/api/projects/${pr.id}/room`, {method: 'POST', body: {...common, walls_m: walls, height_m: height[0], with_floor: !!tn.with_floor}});
+      // Без плитки — «замерь комнату»: тело без tile → бэкенд сохраняет только замеры.
+      await api(`/api/projects/${pr.id}/room`, {method: 'POST', body: {...common, walls_m: walls, height_m: height[0], with_floor: withTile && !!tn.with_floor}});
     } else {
       await api(`/api/projects/${pr.id}/surface`, {method: 'POST', body: {...common, kind: d.kind, width_m: size[0], height_m: size[1]}});
     }
@@ -1044,6 +1065,54 @@ async function createProject(d) {
   state.screen = 'object';
 }
 
+/** Плитка как добавляемая работа: те же параметры, что при создании, но поверх
+ * готовых замеров — комнату мерить заново не нужно. */
+function screenAddTile() {
+  const o = state.object;
+  const hasFloor = (o.measures?.floor_m2 || 0) > 0;
+  const d = state.tiledraft || (state.tiledraft = {
+    tileText: '', errors: {}, adv: false,
+    // 'room' включает в buildTuning тумблер «Пол своей плиткой» — только если пол есть.
+    mode: hasFloor ? 'room' : 'single',
+    tuning: {
+      with_floor: false, joint_mm: 2, thickness_mm: 9, per_pack: null,
+      pattern: 'straight', start_from: 'auto', waste: 7, waterproofing: false,
+    },
+  });
+
+  const box = h(`<div class="screen">
+    <div class="top"><button class="icon-btn" id="back">${icon('back')}</button><h1>Плитка</h1></div>
+    <div id="form"></div>
+    <div class="dock"><button class="btn" id="calc">Посчитать плитку</button></div>
+  </div>`);
+  const form = box.querySelector('#form');
+  form.append(h(`<div class="hint" style="padding:2px 2px 10px">Кладём на снятые замеры комнаты — мерить заново не нужно.</div>`));
+  textField(form, d, 'Плитка, см', 'tileText', '60 30', 'можно в см (60 30) или мм (600 300)');
+  buildTuning(form, d);
+  box.querySelector('#calc').onclick = () => run(() => createTile(d));
+  box.querySelector('#back').onclick = () => go('addwork');
+  return box;
+}
+
+async function createTile(d) {
+  d.errors = {};
+  const tile = await parseField(d.tileText, 'tile', 'tileText', d);
+  if (Object.keys(d.errors).length) { render(); return; }
+  const tn = d.tuning;
+  await api(`/api/projects/${state.object.id}/tile`, {method: 'POST', body: {
+    tile: {width_mm: tile[0], height_mm: tile[1], joint_mm: tn.joint_mm, thickness_mm: tn.thickness_mm, per_pack: tn.per_pack},
+    pattern: tn.pattern, start_from: tn.start_from, waste: tn.waste / 100, waterproofing: tn.waterproofing,
+    with_floor: !!tn.with_floor,
+  }});
+  state.tiledraft = null;
+  // Открываем холст плитки (как openTile, но БЕЗ вложенного run — см. коммент run()).
+  state.object = await api(`/api/objects/${state.object.id}`);
+  state.project = await api(`/api/projects/${state.object.id}`);
+  state.surface = 0;
+  state.lastSchemeUrl = null;
+  state.screen = 'canvas';
+}
+
 // --- сборка ------------------------------------------------------------------
 
 const loadList = () => run(async () => { state.projects = await api('/api/projects'); state.project = null; state.screen = 'list'; });
@@ -1056,7 +1125,7 @@ function skeletonList() {
 function render() {
   const screens = {
     list: screenList, create: screenCreate, object: screenObject,
-    addwork: screenAddWork, work: screenWork, canvas: screenCanvas,
+    addwork: screenAddWork, addtile: screenAddTile, work: screenWork, canvas: screenCanvas,
     buy: screenBuy, paper: screenPaper, money: screenMoney, price: screenPrice,
     loading: skeletonList,
   };
@@ -1071,6 +1140,7 @@ tg?.BackButton?.onClick(() => {
   if (s === 'list') return;
   if (s === 'object' || s === 'price') loadList();
   else if (s === 'create') { state.draft = null; loadList(); }
+  else if (s === 'addtile') { state.tiledraft = null; go('addwork'); }
   else if (s === 'paper') (state.paper?.fromObject ? go('object') : go('canvas'));
   else if (s === 'buy') go('canvas');
   else backToObject();

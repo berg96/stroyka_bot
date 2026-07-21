@@ -394,3 +394,63 @@ class TestObjectEstimate:
         await api.post(f"/api/objects/{room['id']}/works", json={"kind": "plaster"})
         act = (await api.get(f"/api/objects/{room['id']}/act")).json()
         assert act["grand_total"] == pytest.approx(act["works_total"] + act["materials_total"])
+
+
+class TestTileDecoupled:
+    """Плитка расцеплена с созданием: Саню могут позвать не на плитку.
+
+    «Замерь комнату» сохраняет геометрию без обязательной плитки; плитка —
+    добавляемая работа поверх готовых замеров.
+    """
+
+    MEASURE_ONLY = {"walls_m": [2, 1.8, 2, 1.8], "height_m": 2.7}
+
+    async def _measured_room(self, api) -> int:
+        created = await api.post("/api/projects", json={"title": "Ламинат, Борзова"})
+        pid = created.json()["id"]
+        r = await api.post(f"/api/projects/{pid}/room", json=self.MEASURE_ONLY)
+        assert r.status_code == 201, r.text
+        return pid
+
+    async def test_room_without_tile_saves_measures_no_surfaces(self, api):
+        pid = await self._measured_room(api)
+        obj = (await api.get(f"/api/objects/{pid}")).json()
+        assert obj["measures"]["walls"] == [2, 1.8, 2, 1.8]
+        assert obj["measures"]["floor_m2"] > 0  # пол восстановлен и БЕЗ плитки
+        assert obj["has_tile"] is False
+        assert not any(w["kind"] == "tile" for w in obj["works"])
+
+    async def test_laminate_works_on_measure_only_room(self, api):
+        """Замерили под ламинат — пол из замеров есть, работа считается."""
+        pid = await self._measured_room(api)
+        w = (await api.post(f"/api/objects/{pid}/works", json={"kind": "laminate"})).json()
+        assert w["work_sum"] > 0  # взял пол из замеров, хотя плитки нет
+
+    async def test_add_tile_as_work_builds_surfaces(self, api):
+        pid = await self._measured_room(api)
+        r = await api.post(f"/api/projects/{pid}/tile", json={"tile": ROOM["tile"]})
+        assert r.status_code == 201, r.text
+        assert r.json()["walls"] == 4  # 4 стены разложены
+        obj = (await api.get(f"/api/objects/{pid}")).json()
+        assert obj["has_tile"] is True
+        assert any(w["kind"] == "tile" for w in obj["works"])
+
+    async def test_tile_twice_is_refused(self, api):
+        pid = await self._measured_room(api)
+        first = await api.post(f"/api/projects/{pid}/tile", json={"tile": ROOM["tile"]})
+        assert first.status_code == 201
+        r = await api.post(f"/api/projects/{pid}/tile", json={"tile": ROOM["tile"]})
+        assert r.status_code == 409  # плитка на объекте одна
+
+    async def test_tile_without_measures_is_refused(self, api):
+        created = await api.post("/api/projects", json={"title": "Пустой"})
+        pid = created.json()["id"]
+        r = await api.post(f"/api/projects/{pid}/tile", json={"tile": ROOM["tile"]})
+        assert r.status_code == 422  # сначала замерь комнату
+
+    async def test_quick_path_room_with_tile_still_works(self, api):
+        """Быстрый путь (частый кейс Сани): замеры + плитка одним запросом."""
+        room = await _room_via_api(api)
+        obj = (await api.get(f"/api/objects/{room['id']}")).json()
+        assert obj["has_tile"] is True
+        assert any(w["kind"] == "tile" for w in obj["works"])

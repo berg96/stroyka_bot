@@ -182,21 +182,28 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
     @app.post("/api/projects/{project_id}/room", status_code=201)
     async def add_room(project_id: int, body: RoomIn, user: User) -> dict:
         await owned(project_id, user)
-        if body.with_floor and floor_dims(body.walls_m) is None:
+        # Валидацию — ДО записи, чтобы 422 не оставил объект с замерами-сиротой.
+        dims = floor_dims(body.walls_m)
+        if body.tile is not None and body.with_floor and dims is None:
             raise HTTPException(
                 status_code=422,
                 detail="По таким стенам пол не восстановить — комната кривая. "
                 "Померь пол отдельной поверхностью.",
             )
-        surfaces = room_surfaces(body.walls_m, body.height_m, with_floor=body.with_floor)
-        # Замеры комнаты — на уровень объекта: их переиспользуют другие виды работ
-        # (ламинат берёт пол, штукатурка — стены, плинтус — периметр).
-        dims = floor_dims(body.walls_m) if body.with_floor else None
+        # Замеры комнаты — на уровень объекта, НЕЗАВИСИМО от плитки: их берут любые
+        # работы (ламинат — пол, штукатурка — стены, плинтус — периметр). Площадь
+        # пола храним всегда, когда её можно восстановить: без плитки пол тоже нужен.
         floor_m2 = round(dims[0] * dims[1], 2) if dims else 0.0
         await store.set_measures(
             project_id, user,
             {"walls": body.walls_m, "height_m": body.height_m, "floor_m2": floor_m2},
         )
+        if body.tile is None:
+            # «Замерь комнату» без плитки: её добавят работой (POST …/tile) — Саню
+            # могли позвать не на плитку (ламинат, штукатурка).
+            return {"ok": True}
+        # Быстрый путь: плитку задали прямо при создании.
+        surfaces = room_surfaces(body.walls_m, body.height_m, with_floor=body.with_floor)
         return await _save_and_compute(project_id, user, surfaces, body)
 
     @app.post("/api/projects/{project_id}/surface", status_code=201)
@@ -402,6 +409,7 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
             **_project_brief(project),
             "measures": measures,
             "works": works,
+            "has_tile": bool(project.surfaces),
             "total": sum(w["work_sum"] for w in works),
         }
 
@@ -533,6 +541,27 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
         project = await owned(project_id, user)
         return _work_detail(work, await _object_measures(project),
                             (await store.get_or_create_user(user)).price)
+
+    @app.post("/api/projects/{project_id}/tile", status_code=201)
+    async def add_tile(project_id: int, body: TileWorkIn, user: User) -> dict:
+        """Добавить плитку работой поверх снятых замеров: строим tile-поверхности.
+
+        Отдельно от `add_room`, потому что замеры уже есть — плитку кладут на них,
+        второй раз меряться незачем. Плитка на объекте одна: повторно не заводим.
+        """
+        project = await owned(project_id, user)
+        if project.surfaces:
+            raise HTTPException(status_code=409, detail="Плитка на объекте уже есть.")
+        measures = await _object_measures(project)
+        walls = measures.get("walls") or []
+        if len(walls) < 2:
+            raise HTTPException(
+                status_code=422,
+                detail="Сначала замерь комнату — по ней и посчитаем плитку.",
+            )
+        with_floor = body.with_floor and (measures.get("floor_m2") or 0) > 0
+        surfaces = room_surfaces(walls, measures["height_m"], with_floor=with_floor)
+        return await _save_and_compute(project_id, user, surfaces, body)
 
     @app.post("/api/objects/{project_id}/works", status_code=201)
     async def add_work(project_id: int, body: WorkCreateIn, user: User) -> dict:
@@ -859,8 +888,18 @@ class TilingIn(BaseModel):
 
 
 class RoomIn(TilingIn):
+    # Плитку при создании можно НЕ задавать: «замерь комнату» сохраняет только
+    # геометрию, плитку добавят отдельной работой (POST …/tile). Задал сразу —
+    # быстрый путь: замеры + плитка одним махом (частый кейс Сани).
+    tile: TileIn | None = None
     walls_m: list[float] = Field(min_length=2, max_length=12)
     height_m: float = Field(gt=0, le=10)
+    with_floor: bool = False
+
+
+class TileWorkIn(TilingIn):
+    """Плитка как добавляемая работа: поверхности строятся из уже снятых замеров."""
+
     with_floor: bool = False
 
 
