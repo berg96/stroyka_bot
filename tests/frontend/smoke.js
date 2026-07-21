@@ -202,9 +202,18 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   check('ввод: схема укладки есть', !!byText(cw.w, '.seg button', 'Ёлочка'));
   check('ввод: подложка-тумблер есть', !!byText(cw.w, '.spec-row', 'Подложка'));
   // выключить подложку → PATCH и пересчёт
-  byText(cw.w, '.spec-row', 'Подложка').querySelector('.toggle').click();
+  const toggle = byText(cw.w, '.spec-row', 'Подложка').querySelector('.toggle');
+  toggle.click();
   await wait(200);
-  check('тумблер шлёт PATCH input', cw.calls.some((c) => /\/works\/10$/.test(c.url) && c.m === 'PATCH'));
+  const patches = () => cw.calls.filter((c) => /\/works\/10$/.test(c.url) && c.m === 'PATCH');
+  check('тумблер шлёт PATCH input', patches().length >= 1);
+  check('первый клик выключил подложку', patches().pop()?.body?.input?.underlay === false);
+  // второй клик обязан ВКЛЮЧИТЬ обратно (панель не перерисовалась — раньше слал false
+  // повторно из-за stale-замыкания, тумблер залипал; тот же баг был у сантехники).
+  toggle.click();
+  await wait(200);
+  check('второй клик включил подложку обратно (не залип)', patches().pop()?.body?.input?.underlay === true,
+    'тумблер шлёт то же значение второй раз — stale-closure');
   // удалить работу
   cw.w.confirm = () => true;
   cw.w.document.querySelector('#del').click(); await wait(120);

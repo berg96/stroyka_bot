@@ -1,5 +1,7 @@
 """Клавиатуры. Кнопки крупные и понятные — мастер тыкает их мокрым пальцем на объекте."""
 
+from pathlib import Path
+
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -9,8 +11,6 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     WebAppInfo,
 )
-from pathlib import Path
-
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from tilebot.config import get_settings

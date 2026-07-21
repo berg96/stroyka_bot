@@ -353,6 +353,21 @@ class TestWorks:
         r = await api.post(f"/api/objects/{room['id']}/works", json={"kind": "магия"})
         assert r.status_code == 422
 
+    async def test_estimate_merges_duplicate_works_and_materials(self, api):
+        """Две одинаковые работы → одна строка работы и одна строка закупки
+        (мастер покупает материал разом). Мутационно: без сведения строк было бы 2."""
+        room = await _room_via_api(api)
+        w1 = (await api.post(f"/api/objects/{room['id']}/works", json={"kind": "plaster"})).json()
+        single_qty = w1["work_lines"][0]["qty"]  # площадь одной штукатурки (из замеров)
+        await api.post(f"/api/objects/{room['id']}/works", json={"kind": "plaster"})
+        est = (await api.get(f"/api/objects/{room['id']}/estimate")).json()
+        plaster_work = [w for w in est["works"] if w["name"] == "Штукатурка/шпаклёвка"]
+        plaster_mat = [m for m in est["materials"] if m["name"] == "Смесь штукатурная"]
+        assert len(plaster_work) == 1, "две штукатурки не свелись в одну строку работы"
+        assert len(plaster_mat) == 1, "смесь двух работ не свелась в одну строку закупки"
+        # Свелись, а не потерялись: количество — сумма двух работ.
+        assert plaster_work[0]["qty"] == round(single_qty * 2, 2)
+
     async def test_someone_elses_work_not_found(self, api):
         room = await _room_via_api(api)
         w = (await api.post(f"/api/objects/{room['id']}/works", json={"kind": "laminate"})).json()

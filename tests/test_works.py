@@ -123,3 +123,16 @@ class TestComputeWork:
         assert default_input("laminate", self.M)["underlay"] is True
         assert len(default_input("plumbing", self.M)["points"]) >= 6
         assert default_input("baseboard", self.M)["inner_corners"] == 4  # по числу стен
+        assert default_input("plaster", self.M)["with_ceiling"] is False
+
+    def test_plaster_ceiling_adds_floor_area(self):
+        from tilebot.core.works import compute_work, wall_area_m2
+        base = compute_work("plaster", {"layers": 1, "kg_per_m2": 1.2}, self.M, P)
+        withc = compute_work(
+            "plaster", {"layers": 1, "kg_per_m2": 1.2, "with_ceiling": True}, self.M, P
+        )
+        # Галочка добавляет площадь потолка (≈ пол 2.9 м²) к площади стен.
+        assert base.work_lines[0].qty == round(wall_area_m2(self.M), 2)  # 20.52
+        assert withc.work_lines[0].qty == round(wall_area_m2(self.M) + 2.9, 2)  # 23.42
+        # Мутационно: без прибавки потолка тест обязан упасть.
+        assert withc.work_lines[0].qty > base.work_lines[0].qty

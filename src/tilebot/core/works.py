@@ -60,26 +60,32 @@ def _fmt(v: float) -> str:
 # --- Штукатурка / шпаклёвка ---------------------------------------------------
 
 
-def plaster(area_m2: float, *, layers: int, kg_per_m2: float, price: PriceList) -> WorkResult:
-    """Стены/потолок: работа по площади + смесь мешками.
+def plaster(
+    area_m2: float, *, layers: int, kg_per_m2: float, ceiling_m2: float = 0.0,
+    price: PriceList,
+) -> WorkResult:
+    """Стены (+ по галочке потолок): работа по площади + смесь мешками.
 
     Расход смеси зависит от материала (шпаклёвка ~1.2 кг/м²/слой, штукатурка ~9) —
-    берём параметром, дефолт мастер правит.
+    берём параметром, дефолт мастер правит. Потолок — отдельная площадь (≈ площадь
+    пола), включается галочкой: часто штукатурят и его, но не всегда.
     """
-    area = max(0.0, area_m2)
+    walls = max(0.0, area_m2)
+    ceil = max(0.0, ceiling_m2)
+    area = walls + ceil
     work = [WorkLine("Штукатурка/шпаклёвка", round(area, 2), "м²", price.plastering)]
     kg = area * kg_per_m2 * max(1, layers)
     bags = math.ceil(kg / 25) if kg else 0
+    span = f"{_fmt(kg_per_m2)} кг/м² × {layers} сл. ≈ {math.ceil(kg)} кг"
+    if ceil:
+        span = f"стены {_fmt(walls)} + потолок {_fmt(ceil)} м²; " + span
     mats = [
-        MaterialLine(
-            "Смесь штукатурная", bags, "мешков",
-            note=f"{_fmt(kg_per_m2)} кг/м² × {layers} сл. ≈ {math.ceil(kg)} кг",
-            kind="plaster",
-        )
+        MaterialLine("Смесь штукатурная", bags, "мешков", note=span, kind="plaster")
     ]
     return WorkResult(
         WorkKind.PLASTER, work, mats,
-        hero_value=f"{_fmt(area)} м²", hero_note=f"{bags} мешк.",
+        hero_value=f"{_fmt(area)} м²",
+        hero_note=f"{bags} мешк." + (" · с потолком" if ceil else ""),
     )
 
 
@@ -229,7 +235,7 @@ def perimeter_m(m: dict) -> float:
 def default_input(kind: str, measures: dict) -> dict:
     """Дефолты новой работы — чтобы открывалась уже посчитанной («бот думает»)."""
     if kind == WorkKind.PLASTER:
-        return {"surface": "walls", "layers": 1, "kg_per_m2": 1.2}
+        return {"surface": "walls", "layers": 1, "kg_per_m2": 1.2, "with_ceiling": False}
     if kind == WorkKind.LAMINATE:
         return {"pack_m2": 2.1, "waste": 0.05, "underlay": True}
     if kind == WorkKind.BASEBOARD:
@@ -260,8 +266,10 @@ def compute_work(kind: str, inp: dict, measures: dict, price: PriceList) -> Work
         area = inp.get("area_m2")
         if area is None:
             area = wall_area_m2(measures) if inp.get("surface", "walls") == "walls" else 0.0
+        ceiling = floor_area_m2(measures) if inp.get("with_ceiling") else 0.0
         return plaster(area, layers=int(inp.get("layers", 1)),
-                       kg_per_m2=float(inp.get("kg_per_m2", 1.2)), price=price)
+                       kg_per_m2=float(inp.get("kg_per_m2", 1.2)),
+                       ceiling_m2=ceiling, price=price)
     if kind == WorkKind.LAMINATE:
         area = inp.get("area_m2")
         if area is None:

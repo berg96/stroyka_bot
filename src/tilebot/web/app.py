@@ -12,7 +12,7 @@
 import io
 import logging
 import math
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -435,14 +435,40 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
         return await _object_paper(await owned(project_id, user), user, materials_cost=True)
 
     async def _object_paper(project: Project, user_id: int, *, materials_cost: bool) -> dict:
-        """Общая смета/акт по объекту: все работы (плитка + другие) в один документ."""
+        """Общая смета/акт по объекту: все работы (плитка + другие) в один документ.
+
+        Одинаковые строки СВОДИМ: две работы с тем же материалом → одна строка
+        закупки (мастер покупает разом), одинаковые работы → одна строка. Пока
+        объект = одна комната; по-комнатный разрез появится с многокомнатностью.
+        """
         measures = await _object_measures(project)
         price = (await store.get_or_create_user(user_id)).price
-        works_out: list[dict] = []
-        materials_out: list[dict] = []
+
+        # Аккумуляторы с сохранением порядка (плитка → прочие работы).
+        work_acc: dict[tuple, dict] = {}
+        mat_acc: dict[tuple, dict] = {}
+
+        def add_work(name, qty, unit, price_):
+            key = (name, unit, price_)
+            w = work_acc.get(key)
+            if w is None:
+                work_acc[key] = {"name": name, "qty": qty, "unit": unit, "price": price_}
+            else:
+                w["qty"] += qty
 
         def add_material(m, cost, packs=None):
-            materials_out.append({**_line_json(m), "cost": cost, "packs": packs})
+            key = (m.name, m.unit)
+            a = mat_acc.get(key)
+            if a is None:
+                mat_acc[key] = {"line": m, "qty": m.qty, "area": m.area_m2 or 0.0,
+                                "cost": cost or 0.0, "packs": packs, "merged": False}
+            else:
+                a["qty"] += m.qty
+                a["area"] += m.area_m2 or 0.0
+                a["cost"] += cost or 0.0
+                if packs:
+                    a["packs"] = (a["packs"] or 0) + packs
+                a["merged"] = True
 
         # Плитка — своим ядром/сметой.
         if project.surfaces:
@@ -454,8 +480,7 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
                 grout_kind=saved[-1].grout_kind, include_materials_cost=materials_cost,
             )
             for w in est.works:
-                works_out.append({"name": w.name, "qty": round(w.qty, 2), "unit": w.unit,
-                                  "price": w.price, "total": w.total, "total_text": money(w.total)})
+                add_work(w.name, w.qty, w.unit, w.price)
             for m in est.materials:
                 cost = est.material_costs.get(m.name) if materials_cost else None
                 if cost is None:
@@ -466,12 +491,24 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
         for wr in project.works:
             r = compute_work(wr.kind, wr.dump(), measures, price)
             for ln in r.work_lines:
-                works_out.append({
-                    "name": ln.name, "qty": round(ln.qty, 2), "unit": ln.unit,
-                    "price": ln.price, "total": ln.total, "total_text": money(ln.total),
-                })
+                add_work(ln.name, ln.qty, ln.unit, ln.price)
             for m in r.materials:
                 add_material(m, rough_material_cost(m, price))
+
+        works_out: list[dict] = []
+        for w in work_acc.values():
+            total = w["qty"] * w["price"]
+            works_out.append({"name": w["name"], "qty": round(w["qty"], 2), "unit": w["unit"],
+                              "price": w["price"], "total": total, "total_text": money(total)})
+        materials_out: list[dict] = []
+        for a in mat_acc.values():
+            line = a["line"]
+            # Свели несколько источников → подпись первой работы («1.2 кг/м²…») врёт.
+            note = "" if a["merged"] else line.note
+            merged = replace(line, qty=a["qty"], area_m2=(a["area"] or None), note=note)
+            materials_out.append(
+                {**_line_json(merged), "cost": a["cost"] or None, "packs": a["packs"]}
+            )
 
         works_total = sum(w["total"] for w in works_out)
         mats_total = sum(m["cost"] or 0 for m in materials_out)

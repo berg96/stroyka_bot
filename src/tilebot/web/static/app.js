@@ -418,12 +418,14 @@ function workInput(el, w) {
     valueRow(el, 'box', 'Площадь', {value: i.area_m2 ?? Math.round(wallArea * 100) / 100, fmt: (v) => `${fmtNum(v)} м²`, min: 0, max: 500, step: 0.5, onSet: (v) => workPatch({area_m2: v})});
     valueRow(el, 'box', 'Слои', {value: i.layers ?? 1, fmt: (v) => String(Math.round(v)), min: 1, max: 3, step: 1, onSet: (v) => workPatch({layers: Math.round(v)})});
     valueRow(el, 'droplet', 'Расход смеси', {value: i.kg_per_m2 ?? 1.2, fmt: (v) => `${fmtNum(v)} кг/м²`, min: 0.5, max: 15, step: 0.5, onSet: (v) => workPatch({kg_per_m2: v})});
+    // Потолок штукатурят не всегда → галочка; площадь потолка бот берёт из замеров (≈ пол).
+    toggleRow(el, 'box', 'Считать потолок', !!i.with_ceiling, (v) => workPatch({with_ceiling: v}));
   } else if (w.kind === 'laminate') {
     // Площадь пола из замеров — если её нет (комната без пола), мастер вводит сам.
     valueRow(el, 'box', 'Пол', {value: i.area_m2 ?? Math.round(floor * 100) / 100, fmt: (v) => `${fmtNum(v)} м²`, min: 0, max: 500, step: 0.1, onSet: (v) => workPatch({area_m2: v})});
     valueRow(el, 'box', 'Пачка', {value: i.pack_m2 ?? 2.1, fmt: (v) => `${fmtNum(v)} м²`, min: 0.5, max: 5, step: 0.1, onSet: (v) => workPatch({pack_m2: v})});
     blockRow(el, 'layers', 'Схема укладки', seg([['Прямая', '0.05'], ['Диагональ', '0.12'], ['Ёлочка', '0.15']], String(i.waste ?? 0.05), (v) => workPatch({waste: parseFloat(v)})));
-    toggleRow(el, 'grid', 'Подложка', i.underlay !== false, () => workPatch({underlay: !(i.underlay !== false)}));
+    toggleRow(el, 'grid', 'Подложка', i.underlay !== false, (v) => workPatch({underlay: v}));
   } else if (w.kind === 'baseboard') {
     // Периметр и углы предполагаются из замеров (N стен → N внутр. углов),
     // соединители считаются авто (планок−1). Всё правится.
@@ -681,8 +683,8 @@ function buildSpec(el, r) {
     `${t.width_mm.toFixed(0)}×${t.height_mm.toFixed(0)} (${t.lying ? 'лёжа' : 'стоя'})`,
     () => livePatch({rotate: true}));
 
-  if (r.can_wrap) toggleRow(el, 'spark', 'Эконом: лента по кругу', r.wrap, () => livePatch({wrap: !r.wrap}));
-  toggleRow(el, 'droplet', 'Гидроизоляция', r.waterproofing, () => livePatch({waterproofing: !r.waterproofing}));
+  if (r.can_wrap) toggleRow(el, 'spark', 'Эконом: лента по кругу', r.wrap, (v) => livePatch({wrap: v}));
+  toggleRow(el, 'droplet', 'Гидроизоляция', r.waterproofing, (v) => livePatch({waterproofing: v}));
 }
 
 /** Сегмент-переключатель: [[label, value], …]. */
@@ -724,9 +726,13 @@ function inlineRow(el, ic, lab, valText, onClick) {
 
 /** Тумблер. */
 function toggleRow(el, ic, lab, on, onClick) {
+  // Держит своё состояние: точечный patch НЕ перерисовывает панель, поэтому читать
+  // исходный проп в колбэке нельзя — второй клик слал бы то же значение (ровно
+  // stale-closure баг, что был у переключателей сантехники). Отдаём НОВОЕ значение.
+  let cur = on;
   const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${esc(lab)}</span><button class="toggle ${on ? 'on' : ''}"></button></div>`).firstElementChild;
   const t = node.querySelector('.toggle');
-  t.onclick = () => { t.classList.toggle('on'); onClick(); };
+  t.onclick = () => { cur = !cur; t.classList.toggle('on', cur); onClick(cur); };
   el.append(node);
 }
 
@@ -978,7 +984,7 @@ function buildTuning(el, d) {
 
   const b = h(`<div class="tuning-body"></div>`).firstElementChild;
   const redraw = () => render();
-  if (d.mode === 'room') toggleRow(b, 'grid', 'Пол своей плиткой', tn.with_floor, () => { tn.with_floor = !tn.with_floor; redraw(); });
+  if (d.mode === 'room') toggleRow(b, 'grid', 'Пол своей плиткой', tn.with_floor, (v) => { tn.with_floor = v; redraw(); });
   valueRow(b, 'grid', 'Шов', {value: tn.joint_mm, fmt: (v) => `${fmtNum(v)} мм`, min: 0.5, max: 10, step: 0.5, onSet: (v) => { tn.joint_mm = v; redraw(); }});
   valueRow(b, 'box', 'Толщина плитки', {value: tn.thickness_mm, fmt: (v) => `${fmtNum(v)} мм`, min: 3, max: 30, step: 1, onSet: (v) => { tn.thickness_mm = v; redraw(); }});
   // штук в упаковке — пусто = не знаю, считаю штуками
@@ -989,7 +995,7 @@ function buildTuning(el, d) {
   blockRow(b, 'layers', 'Раскладка', seg(PATTERNS, tn.pattern, (v) => { tn.pattern = v; redraw(); }));
   blockRow(b, 'ruler', 'Начало ряда', seg([['От угла', 'edge'], ['От центра', 'center'], ['Реши сам', 'auto']], tn.start_from, (v) => { tn.start_from = v; redraw(); }));
   valueRow(b, 'package', 'Запас', {value: tn.waste, fmt: (v) => `${Math.round(v)}%`, min: 0, max: 30, step: 1, onSet: (v) => { tn.waste = v; redraw(); }});
-  toggleRow(b, 'droplet', 'Гидроизоляция', tn.waterproofing, () => { tn.waterproofing = !tn.waterproofing; redraw(); });
+  toggleRow(b, 'droplet', 'Гидроизоляция', tn.waterproofing, (v) => { tn.waterproofing = v; redraw(); });
   el.append(b);
 }
 
