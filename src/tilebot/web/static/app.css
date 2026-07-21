@@ -20,7 +20,13 @@
   --accent: #ea580c;
   --accent-press: #c2410c;
   --accent-weak: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 11%, var(--surface));
+  --accent-tx: var(--accent-press);
   --on-accent: #ffffff;
+
+  /* Заливка контролов (степперы, сегменты, тумблеры) — приглушённая под темой. */
+  --field: var(--tg-theme-secondary-bg-color, #efedea);
+  --field-bd: var(--border);
 
   --ok: #2e9e5b;
   --danger: #d64545;
@@ -47,6 +53,9 @@
     --border: color-mix(in srgb, var(--text) 14%, transparent);
     --border-strong: color-mix(in srgb, var(--text) 26%, transparent);
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 30px rgba(0, 0, 0, .4);
+    --accent-soft: color-mix(in srgb, var(--accent) 24%, var(--surface));
+    --accent-tx: #fb923c;
+    --field: var(--tg-theme-secondary-bg-color, #232e3c);
   }
 }
 
@@ -175,14 +184,22 @@ input:focus { outline: none; border-color: var(--accent); }
 .field .err { font-size: 13px; color: var(--danger); margin-top: 6px; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
-/* сегмент-переключатель */
-.seg { display: flex; gap: 4px; background: var(--surface-2); border-radius: 999px; padding: 4px; }
+/* сегмент-переключатель — сетка карточек, активный залит акцентом (язык макета) */
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+.seg.wrap { grid-auto-flow: row; grid-template-columns: repeat(2, 1fr); }
 .seg button {
-  flex: 1; border: 0; background: transparent; color: var(--text-2);
-  padding: 9px 8px; border-radius: 999px; font-size: 14px; font-weight: 500;
+  border: 1px solid var(--field-bd); background: var(--field); color: var(--text);
+  padding: 11px 6px; border-radius: var(--r-sm); font-size: 13px; font-weight: 600;
+  line-height: 1.15; transition: background .14s ease, color .14s ease, border-color .14s ease;
 }
-.seg button.on { background: var(--surface); color: var(--text); font-weight: 600;
-                 box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.seg button.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.seg button:active { transform: scale(.97); }
+
+/* подпись раздела в спеке/вводе (капсом-хинт из макета) */
+.seclab { font-size: 11px; font-weight: 500; color: var(--hint); margin: 14px 2px 8px;
+          letter-spacing: .02em; }
+.seclab:first-child { margin-top: 2px; }
+.seclab.accent { color: var(--accent-tx); }
 
 /* --- ХОЛСТ ОБЪЕКТА --- */
 .scheme-wrap { position: relative; border-radius: var(--r); overflow: hidden;
@@ -197,10 +214,12 @@ input:focus { outline: none; border-color: var(--accent); }
 .tabs { display: flex; gap: 6px; overflow-x: auto; padding: 10px 0 2px; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
 .tab {
-  flex: 0 0 auto; border: 1px solid var(--border); background: var(--surface);
-  color: var(--text-2); padding: 7px 13px; border-radius: 999px; font-size: 14px; font-weight: 500;
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--field-bd); background: var(--field);
+  color: var(--text-2); padding: 8px 14px; border-radius: 999px; font-size: 14px; font-weight: 600;
 }
-.tab.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.tab .ic { width: 16px; height: 16px; }
+.tab.on { background: var(--accent-soft); color: var(--accent-tx); border-color: var(--accent); }
 
 /* итоговая карточка результата */
 .result { margin-top: 12px; }
@@ -221,34 +240,65 @@ input:focus { outline: none; border-color: var(--accent); }
   border-radius: var(--r); padding: 11px 13px; margin-top: 12px; font-size: 14px; font-weight: 500; }
 .savings .ic { stroke: var(--ok); }
 
-/* спека — правится на месте */
-.spec { margin-top: 14px; display: flex; flex-direction: column; gap: 2px; }
-.spec-row {
-  display: flex; align-items: center; gap: 12px; min-height: 52px;
-  padding: 8px 4px; border-bottom: 1px solid var(--border);
-}
-.spec-row:last-child { border-bottom: 0; }
-.spec-row .ic { color: var(--hint); }
-.spec-row .lab { flex: 1; font-size: 15px; }
-.spec-row .val { color: var(--text-2); font-size: 14px; }
+/* спека / ввод — правится на месте; всё карточками, как в макете */
+.spec { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.spec > .seclab { margin-bottom: -2px; }
 
-/* степпер ± */
-.stepper { display: flex; align-items: center; gap: 2px; }
+/* базовая карточка-контрол */
+.ctl { border: 1px solid var(--field-bd); background: var(--field); border-radius: var(--r); }
+.ctl .clab { font-size: 11px; font-weight: 500; color: var(--hint); }
+.ctl-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ctl-pair.three { grid-template-columns: repeat(3, 1fr); }
+
+/* степпер как карточка: подпись сверху, ниже − значение + */
+.stepper { padding: 10px 12px; }
+.stepper .clab { margin-bottom: 8px; display: block; }
+.stepper .row { display: flex; align-items: center; justify-content: space-between; }
 .stepper button {
-  width: 34px; height: 34px; border-radius: 999px; border: 1px solid var(--border);
-  background: var(--surface); color: var(--text); font-size: 20px; line-height: 1;
-  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: var(--r-sm); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 18px; line-height: 1;
+  display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
 }
 .stepper button:active { background: var(--accent-weak); border-color: var(--accent); }
-.stepper .cur { min-width: 62px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stepper .cur-slot { flex: 1; text-align: center; min-width: 0; }
+.stepper .cur { font-weight: 600; font-size: 16px; font-variant-numeric: tabular-nums;
+  border: 0; background: transparent; color: var(--text); cursor: text; white-space: nowrap; }
 
-/* тумблер */
-.toggle { width: 50px; height: 30px; border-radius: 999px; background: var(--border-strong);
+/* nav-карточка (Размер плитки): icon-box + подпись/значение + шеврон */
+.navcard { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  padding: 11px 13px; color: inherit; font: inherit; cursor: pointer; }
+.navcard:active { background: var(--accent-weak); }
+.navcard .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.navcard .v { font-size: 14px; font-weight: 600; }
+.navcard .chev { color: var(--hint); flex: 0 0 auto; }
+.iconbox { width: 34px; height: 34px; border-radius: var(--r-sm); flex: 0 0 auto;
+  background: var(--accent-soft); color: var(--accent-tx);
+  display: flex; align-items: center; justify-content: center; }
+.iconbox .ic { width: 19px; height: 19px; }
+
+/* строка-тумблер карточкой: подпись(+подпись) слева, тумблер справа */
+.toggle-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+.toggle-row .tt { flex: 1; min-width: 0; }
+.toggle-row .lab { display: block; font-size: 13px; font-weight: 600; }
+.toggle-row .sub { display: block; font-size: 11px; color: var(--hint); margin-top: 2px; }
+
+/* инлайн-строка карточкой: подпись слева, кнопка-значение справа */
+.inline-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+.inline-row .lab { flex: 1; font-size: 14px; font-weight: 500; }
+.inline-row .mini { font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: var(--r-sm);
+  background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+
+/* подсвеченная под-панель (смещение — только «вразбежку») */
+.subpanel { background: var(--accent-soft); border: 1px solid var(--border); border-radius: var(--r); padding: 11px 12px; }
+.subpanel .seclab { margin: 0 0 8px; }
+
+/* тумблер (сам переключатель) */
+.toggle { width: 46px; height: 28px; border-radius: 999px; background: var(--border-strong);
   position: relative; border: 0; transition: background .18s ease; flex: 0 0 auto; }
 .toggle.on { background: var(--accent); }
-.toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px;
+.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 24px; height: 24px;
   border-radius: 999px; background: #fff; transition: transform .18s ease; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
-.toggle.on::after { transform: translateX(20px); }
+.toggle.on::after { transform: translateX(18px); }
 
 /* набор чипов (раскладка, цвет затирки) */
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -268,11 +318,13 @@ input:focus { outline: none; border-color: var(--accent); }
 .doc .total { display: flex; justify-content: space-between; align-items: baseline;
   border-top: 2px solid var(--border-strong); margin-top: 12px; padding-top: 12px;
   font-weight: 700; font-size: 18px; }
+.doc .total.grand { border-top-color: var(--accent); font-size: 20px; }
+.doc .total.grand .num { color: var(--accent-tx); }
 
 .advice { display: flex; gap: 9px; align-items: flex-start;
-  background: var(--surface-2); border-radius: var(--r-sm); padding: 10px 12px;
-  margin-top: 8px; font-size: 14px; color: var(--text-2); }
-.advice .ic { color: var(--accent); }
+  background: var(--accent-soft); border: 1px solid var(--border); border-radius: var(--r); padding: 11px 13px;
+  margin-top: 8px; font-size: 14px; color: var(--text); }
+.advice .ic { color: var(--accent-tx); flex: 0 0 auto; }
 
 /* --- состояния --- */
 .center { min-height: 70dvh; display: flex; flex-direction: column;
@@ -295,11 +347,8 @@ input:focus { outline: none; border-color: var(--accent); }
 
 .section-gap { height: 6px; }
 
-/* спека v2: широкий блок под подписью + ввод с клавиатуры + вьюер схемы */
-.spec-block { padding: 12px 4px; border-bottom: 1px solid var(--border); }
-.spec-block:last-child { border-bottom: 0; }
-.spec-lab { display: flex; align-items: center; gap: 12px; font-size: 15px; margin-bottom: 10px; }
-.spec-lab .ic { color: var(--hint); }
+/* широкий блок «подпись раздела + контрол» (раскладка, начало ряда, затирка) */
+.spec-block .seg, .spec-block .chips { margin-top: 0; }
 .scheme { cursor: zoom-in; }
 
 .cur-input {
@@ -308,8 +357,7 @@ input:focus { outline: none; border-color: var(--accent); }
   background: var(--surface); color: var(--text);
   font: inherit; font-variant-numeric: tabular-nums;
 }
-.stepper .cur { border: 0; background: transparent; color: var(--text); cursor: text;
-  border-bottom: 1px dashed var(--border-strong); border-radius: 0; }
+.stepper .cur-input { width: 64px; }
 
 .viewer {
   position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, .93);
@@ -331,18 +379,19 @@ input:focus { outline: none; border-color: var(--accent); }
 .field .help { display: block; }
 .tuning-head {
   display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--accent-soft); border: 1px solid var(--border); border-radius: var(--r);
   padding: 14px; margin-top: 18px; color: inherit; font: inherit;
 }
-.tuning-head:active { background: var(--surface-2); }
+.tuning-head:active { filter: brightness(.97); }
+.tuning-head > .ic:first-child { color: var(--accent-tx); }
 .tuning-head .grow { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .tuning-head .sum { color: var(--hint); font-size: 13px; margin-top: 2px; }
 .tuning-head .ic { color: var(--hint); }
 .tuning-body {
-  border: 1px solid var(--border); border-top: 0;
-  border-radius: 0 0 var(--r) var(--r); padding: 2px 12px 8px; background: var(--surface);
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 2px 2px;
 }
-.tuning-body .field:first-child { margin-top: 8px; }
+.tuning-body .field { margin: 0; }
 
 /* переименование объекта */
 .top h1 { cursor: text; }

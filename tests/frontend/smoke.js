@@ -142,10 +142,10 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   check('холст: число плиток', t().includes('145'));
   check('холст: схема запрошена', calls.some((c) => /scheme\/0\.png/.test(c.url)));
   check('спека: раскладка есть', !!byText(w, '.seg button', 'Диагональ'));
-  check('спека: степпер шва есть', !!byText(w, '.spec-row .lab', 'Шов'));
+  check('спека: степпер шва есть (карточка)', !!byText(w, '.stepper .clab', 'Шов'));
   check('шов: и −, и + на месте', w.document.querySelectorAll('.stepper .minus').length >= 1 && w.document.querySelectorAll('.stepper .plus').length >= 1);
-  check('спека: эконом-тумблер есть', !!byText(w, '.spec-row', 'Эконом'));
-  check('спека: размер плитки есть', !!byText(w, '.spec-row .lab', 'Размер плитки'));
+  check('спека: эконом-тумблер есть', !!byText(w, '.toggle-row', 'Эконом'));
+  check('спека: размер плитки — nav-карточка', !!byText(w, '.navcard .clab', 'Размер плитки'));
 
   console.log('\nЖивой пересчёт (тап по раскладке)');
   const before = calls.length;
@@ -157,12 +157,12 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   void before;
 
   console.log('\nШов: степпер и ввод с клавиатуры');
-  const plus = [...w.document.querySelectorAll('.spec-row')].find((r) => r.textContent.includes('Шов'))?.querySelector('.plus');
+  const plus = [...w.document.querySelectorAll('.stepper')].find((r) => r.textContent.includes('Шов'))?.querySelector('.plus');
   plus?.click();
   await wait(200);
   check('«+» шва шлёт PATCH joint_mm', calls.some((c) => c.m === 'PATCH' && c.body?.joint_mm != null));
   // тап по числу → поле ввода
-  const cur = [...w.document.querySelectorAll('.spec-row')].find((r) => r.textContent.includes('Шов'))?.querySelector('.cur');
+  const cur = [...w.document.querySelectorAll('.stepper')].find((r) => r.textContent.includes('Шов'))?.querySelector('.cur');
   cur?.click();
   await wait(30);
   check('тап по числу открывает ввод с клавиатуры', !!w.document.querySelector('.cur-input'));
@@ -206,9 +206,9 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   check('экран вида: ламинат создан (POST works)', cw.calls.some((c) => /\/works$/.test(c.url) && c.m === 'POST'));
   check('экран вида: работа и результат', cw.w.document.body.textContent.includes('Ламинат') && cw.w.document.body.textContent.includes('1 764'));
   check('ввод: схема укладки есть', !!byText(cw.w, '.seg button', 'Ёлочка'));
-  check('ввод: подложка-тумблер есть', !!byText(cw.w, '.spec-row', 'Подложка'));
+  check('ввод: подложка-тумблер есть', !!byText(cw.w, '.toggle-row', 'Подложка'));
   // выключить подложку → PATCH и пересчёт
-  const toggle = byText(cw.w, '.spec-row', 'Подложка').querySelector('.toggle');
+  const toggle = byText(cw.w, '.toggle-row', 'Подложка').querySelector('.toggle');
   toggle.click();
   await wait(200);
   const patches = () => cw.calls.filter((c) => /\/works\/10$/.test(c.url) && c.m === 'PATCH');
@@ -231,8 +231,8 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   byText(cp.w, '.tile-row', 'Ванная').click(); await wait(80);
   byText(cp.w, '.btn', 'Добавить работу').click(); await wait(50);
   byText(cp.w, '.tile-row', 'Сантехника').click(); await wait(120);
-  check('экран сантехники: точки с переключателями', cp.w.document.querySelectorAll('#input .spec-row .toggle').length >= 2);
-  const firstToggle = cp.w.document.querySelector('#input .spec-row .toggle');
+  check('экран сантехники: точки с переключателями', cp.w.document.querySelectorAll('#input .toggle-row .toggle').length >= 2);
+  const firstToggle = cp.w.document.querySelector('#input .toggle-row .toggle');
   check('переключатель сначала выключен', !firstToggle.classList.contains('on'));
   firstToggle.click();
   await wait(200);
@@ -244,7 +244,7 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   check('сумма работы обновилась (не 0)', byText(cp.w, '.result .big', '3 500') || byText(cp.w, '#w-hero', '3 500'),
     'work_sum не отобразился — «не добавлялось к сумме»');
   // второй переключатель не должен гасить первый (устаревшее состояние)
-  const toggles = cp.w.document.querySelectorAll('#input .spec-row .toggle');
+  const toggles = cp.w.document.querySelectorAll('#input .toggle-row .toggle');
   if (toggles[1]) { toggles[1].click(); await wait(200); }
   check('второй клик НЕ сбросил первый', cp.calls.filter((c) => /\/works\/11$/.test(c.url) && c.m === 'PATCH').pop()?.body?.input?.points?.[0]?.on === true,
     'клик по второй точке затёр первую — устаревшее замыкание');
@@ -304,7 +304,7 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   await wait();
   byText(cm.w, '.btn', 'Новый объект').click(); await wait(50);
   // выключаем «Посчитать плитку сейчас» → поле плитки и кнопка меняются
-  const tileToggle = byText(cm.w, '.spec-row', 'Посчитать плитку сейчас')?.querySelector('.toggle');
+  const tileToggle = byText(cm.w, '.toggle-row', 'Посчитать плитку сейчас')?.querySelector('.toggle');
   check('тумблер «Посчитать плитку сейчас» есть и включён', tileToggle && tileToggle.classList.contains('on'));
   tileToggle.click(); await wait(50);
   check('поле «Плитка» скрылось при выключенном тумблере',

@@ -191,6 +191,7 @@ function screenList() {
       : p.deal_amount ? `<span class="pill paid">рассчитались</span>` : '';
     const card = h(`
       <button class="tile-row">
+        <span class="iconbox">${icon('grid', 'ic')}</span>
         <span class="grow"><span class="title">${esc(p.title)}</span>
           <span class="sub">${p.surfaces} ${plural(p.surfaces, 'поверхность', 'поверхности', 'поверхностей')}</span></span>
         ${money_}${icon('chevron', 'ic chev')}
@@ -262,7 +263,7 @@ function screenObject() {
     works.append(h(`<div class="hint" style="padding:4px 2px">Добавь первую работу — плитка, штукатурка, ламинат, сантехника… соберём всё в одну смету.</div>`));
   }
   o.works.forEach((w) => {
-    const card = h(`<button class="tile-row">${icon(WORK_ICON[w.kind] || 'box', 'ic')}
+    const card = h(`<button class="tile-row"><span class="iconbox">${icon(WORK_ICON[w.kind] || 'box', 'ic')}</span>
       <span class="grow"><span class="title">${esc(w.name)}</span>
         <span class="sub">${esc(w.hero_value)}${w.hero_note ? ' · ' + esc(w.hero_note) : ''}</span></span>
       <span class="pill">${money(w.work_sum)}</span>${icon('chevron', 'ic chev')}</button>`);
@@ -299,7 +300,7 @@ function screenAddWork() {
   const types = box.querySelector('#types');
   WORK_TYPES.forEach(([kind, name, ic, sub]) => {
     const exists = kind === 'tile' && has.has('tile');
-    const card = h(`<button class="tile-row">${icon(ic, 'ic-lg ic')}
+    const card = h(`<button class="tile-row"><span class="iconbox">${icon(ic, 'ic')}</span>
       <span class="grow"><span class="title">${esc(name)}</span>
         <span class="sub">${esc(exists ? 'уже добавлена — открыть' : sub)}</span></span>
       ${icon('chevron', 'ic chev')}</button>`);
@@ -379,20 +380,20 @@ function screenWork() {
       <button class="icon-btn" id="del" aria-label="Удалить">${icon('trash')}</button></div>
     <p class="hint">${esc(o.title)} · из замеров комнаты</p>
     <div class="tabs" id="tabs"></div>
-    <h2>Ввод · правится на месте</h2>
+    <div class="seclab">Ввод · правится на месте</div>
     <div class="spec" id="input"></div>
     <div class="result" style="margin-top:16px">
       <div class="big"><span class="n js-wnum" id="w-hero">${money(w.work_sum)}</span><span class="u">работа</span></div>
       <div class="meta js-wnum" id="w-meta">${esc(w.hero_value)}${w.hero_note ? ' · ' + esc(w.hero_note) : ''}</div>
     </div>
-    <h2>В смету пойдёт</h2>
+    <div class="seclab">В смету пойдёт</div>
     <div class="card buy" id="lines"></div>
     <div class="dock"><button class="btn" id="save">Готово</button></div></div>`);
 
   // табы всех работ объекта
   const tabs = box.querySelector('#tabs');
   o.works.forEach((ow) => {
-    const b = h(`<button class="tab ${ow.id === w.id ? 'on' : ''}">${esc(ow.name)}</button>`);
+    const b = h(`<button class="tab ${ow.id === w.id ? 'on' : ''}">${icon(WORK_ICON[ow.kind] || 'box', 'ic')}${esc(ow.name)}</button>`);
     b.querySelector('button').onclick = () => (ow.id === w.id ? null : ow.kind === 'tile' ? openTile() : openWork(ow));
     tabs.append(b);
   });
@@ -419,26 +420,32 @@ function workInput(el, w) {
   const floor = m.floor_m2 || 0;
   if (w.kind === 'plaster') {
     // Площадь стен из замеров, но правится (потолок/часть стены/своё число).
-    valueRow(el, 'box', 'Площадь', {value: i.area_m2 ?? Math.round(wallArea * 100) / 100, fmt: (v) => `${fmtNum(v)} м²`, min: 0, max: 500, step: 0.5, onSet: (v) => workPatch({area_m2: v})});
-    valueRow(el, 'box', 'Слои', {value: i.layers ?? 1, fmt: (v) => String(Math.round(v)), min: 1, max: 3, step: 1, onSet: (v) => workPatch({layers: Math.round(v)})});
+    const top = ctlPair(el);
+    valueRow(top, 'box', 'Площадь', {value: i.area_m2 ?? Math.round(wallArea * 100) / 100, fmt: (v) => `${fmtNum(v)} м²`, min: 0, max: 500, step: 0.5, onSet: (v) => workPatch({area_m2: v})});
+    valueRow(top, 'box', 'Слои', {value: i.layers ?? 1, fmt: (v) => String(Math.round(v)), min: 1, max: 3, step: 1, onSet: (v) => workPatch({layers: Math.round(v)})});
     valueRow(el, 'droplet', 'Расход смеси', {value: i.kg_per_m2 ?? 1.2, fmt: (v) => `${fmtNum(v)} кг/м²`, min: 0.5, max: 15, step: 0.5, onSet: (v) => workPatch({kg_per_m2: v})});
     // Потолок штукатурят не всегда → галочка; площадь потолка бот берёт из замеров (≈ пол).
-    toggleRow(el, 'box', 'Считать потолок', !!i.with_ceiling, (v) => workPatch({with_ceiling: v}));
+    toggleRow(el, 'box', 'Считать потолок', !!i.with_ceiling, (v) => workPatch({with_ceiling: v}),
+      floor ? `+ ${fmtNum(floor)} м² к площади` : 'площадь потолка ≈ пол');
   } else if (w.kind === 'laminate') {
     // Площадь пола из замеров — если её нет (комната без пола), мастер вводит сам.
-    valueRow(el, 'box', 'Пол', {value: i.area_m2 ?? Math.round(floor * 100) / 100, fmt: (v) => `${fmtNum(v)} м²`, min: 0, max: 500, step: 0.1, onSet: (v) => workPatch({area_m2: v})});
-    valueRow(el, 'box', 'Пачка', {value: i.pack_m2 ?? 2.1, fmt: (v) => `${fmtNum(v)} м²`, min: 0.5, max: 5, step: 0.1, onSet: (v) => workPatch({pack_m2: v})});
+    const top = ctlPair(el);
+    valueRow(top, 'box', 'Пол', {value: i.area_m2 ?? Math.round(floor * 100) / 100, fmt: (v) => `${fmtNum(v)} м²`, min: 0, max: 500, step: 0.1, onSet: (v) => workPatch({area_m2: v})});
+    valueRow(top, 'box', 'Пачка', {value: i.pack_m2 ?? 2.1, fmt: (v) => `${fmtNum(v)} м²`, min: 0.5, max: 5, step: 0.1, onSet: (v) => workPatch({pack_m2: v})});
     blockRow(el, 'layers', 'Схема укладки', seg([['Прямая', '0.05'], ['Диагональ', '0.12'], ['Ёлочка', '0.15']], String(i.waste ?? 0.05), (v) => workPatch({waste: parseFloat(v)})));
-    toggleRow(el, 'grid', 'Подложка', i.underlay !== false, (v) => workPatch({underlay: v}));
+    toggleRow(el, 'grid', 'Подложка', i.underlay !== false, (v) => workPatch({underlay: v}),
+      `${fmtNum(i.area_m2 ?? Math.round(floor * 100) / 100)} м² под ламинат`);
   } else if (w.kind === 'baseboard') {
     // Периметр и углы предполагаются из замеров (N стен → N внутр. углов),
     // соединители считаются авто (планок−1). Всё правится.
     const nWalls = (m.walls || []).length || 4;
-    valueRow(el, 'ruler', 'Периметр', {value: i.perimeter_m ?? Math.round(perim * 100) / 100, fmt: (v) => `${fmtNum(v)} м`, min: 0, max: 200, step: 0.1, onSet: (v) => workPatch({perimeter_m: v})});
-    valueRow(el, 'ruler', 'Длина планки', {value: i.plank_m ?? 2.5, fmt: (v) => `${fmtNum(v)} м`, min: 1, max: 4, step: 0.1, onSet: (v) => workPatch({plank_m: v})});
-    valueRow(el, 'grid', 'Внутр. углов', {value: i.inner_corners ?? nWalls, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({inner_corners: Math.round(v)})});
-    valueRow(el, 'grid', 'Внешних углов', {value: i.outer_corners ?? 0, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({outer_corners: Math.round(v)})});
-    valueRow(el, 'door', 'Заглушек', {value: i.end_caps ?? 0, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({end_caps: Math.round(v)})});
+    const top = ctlPair(el);
+    valueRow(top, 'ruler', 'Периметр', {value: i.perimeter_m ?? Math.round(perim * 100) / 100, fmt: (v) => `${fmtNum(v)} м`, min: 0, max: 200, step: 0.1, onSet: (v) => workPatch({perimeter_m: v})});
+    valueRow(top, 'ruler', 'Длина планки', {value: i.plank_m ?? 2.5, fmt: (v) => `${fmtNum(v)} м`, min: 1, max: 4, step: 0.1, onSet: (v) => workPatch({plank_m: v})});
+    const corners = ctlPair(el, true);
+    valueRow(corners, 'grid', 'Внутр. углов', {value: i.inner_corners ?? nWalls, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({inner_corners: Math.round(v)})});
+    valueRow(corners, 'grid', 'Внешних', {value: i.outer_corners ?? 0, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({outer_corners: Math.round(v)})});
+    valueRow(corners, 'door', 'Заглушек', {value: i.end_caps ?? 0, fmt: (v) => String(Math.round(v)), min: 0, max: 20, step: 1, onSet: (v) => workPatch({end_caps: Math.round(v)})});
   } else if (w.kind === 'reveals') {
     valueRow(el, 'ruler', 'Ширина откоса', {value: i.reveal_width_cm ?? 25, fmt: (v) => `${fmtNum(v)} см`, min: 5, max: 60, step: 1, onSet: (v) => workPatch({reveal_width_cm: v})});
     revealsOpenings(el, i.openings || []);
@@ -449,7 +456,7 @@ function workInput(el, w) {
 
 function revealsOpenings(el, openings) {
   let list = openings.slice();
-  el.append(h(`<div class="spec-lab" style="margin-top:8px">${icon('door', 'ic')}<span>Проёмы (окна и двери)</span></div>`));
+  el.append(h(`<div class="seclab">Проёмы (окна и двери)</div>`));
   const listEl = h(`<div id="openings"></div>`).firstElementChild;
   const paint = () => {
     listEl.innerHTML = '';
@@ -485,9 +492,9 @@ function plumbingPoints(el, points) {
   // загорался, а соседние клики затирали друг друга (слали устаревший набор).
   const list = points.map((p) => ({...p}));
   list.forEach((p) => {
-    const row = h(`<div class="spec-row">
+    const row = h(`<div class="ctl toggle-row">
       <button class="toggle ${p.on ? 'on' : ''}"></button>
-      <span class="lab">${esc(p.name)}</span>
+      <span class="lab" style="flex:1">${esc(p.name)}</span>
       <input class="cur-input" inputmode="numeric" value="${p.price}" style="width:84px">
     </div>`).firstElementChild;
     const btn = row.querySelector('.toggle');
@@ -599,7 +606,7 @@ function screenCanvas() {
   const wtabs = box.querySelector('#work-tabs');
   if (state.object && state.object.works && state.object.works.length > 1) {
     state.object.works.forEach((ow) => {
-      const b = h(`<button class="tab ${ow.kind === 'tile' ? 'on' : ''}">${esc(ow.name)}</button>`);
+      const b = h(`<button class="tab ${ow.kind === 'tile' ? 'on' : ''}">${icon(WORK_ICON[ow.kind] || 'box', 'ic')}${esc(ow.name)}</button>`);
       b.querySelector('button').onclick = () => (ow.kind === 'tile' ? null : openWork(ow));
       wtabs.append(b);
     });
@@ -652,36 +659,38 @@ const matchOffset = (ratio) => (OFFSETS.find(([, , r]) => Math.abs(r - ratio) < 
 function buildSpec(el, r) {
   const t = r.tile;
 
+  el.append(h(`<div class="seclab">Спека · правится на месте</div>`));
   sizeRow(el, r);
+
+  // Шов и Запас — парой (как в макете): два степпера в ряд.
+  const pair = ctlPair(el);
+  valueRow(pair, 'grid', 'Шов', {
+    value: t.joint_mm, fmt: (v) => `${fmtNum(v)} мм`, min: 0.5, max: 10, step: 0.5,
+    onSet: (v) => livePatch({joint_mm: v}),
+  });
+  valueRow(pair, 'package', 'Запас', {
+    value: Math.round(r.waste * 100), fmt: (v) => `${Math.round(v)}%`, min: 0, max: 30, step: 1,
+    onSet: (v) => livePatch({waste: v / 100}),
+  });
 
   blockRow(el, 'grid', 'Раскладка', seg(PATTERNS, r.pattern, (v) => livePatch({pattern: v})));
 
   if (r.pattern === 'brick') {
-    blockRow(el, 'layers', 'Смещение рядов',
-      seg(OFFSETS, matchOffset(r.offset_ratio), (v) => livePatch({offset_label: v})));
+    // Подсвеченная под-панель — смещение работает только на «вразбежку».
+    const sp = h(`<div class="subpanel"><div class="seclab accent">Смещение · только «вразбежку»</div></div>`).firstElementChild;
+    sp.append(seg(OFFSETS, matchOffset(r.offset_ratio), (v) => livePatch({offset_label: v})));
+    el.append(sp);
   }
 
   blockRow(el, 'ruler', 'Начало ряда',
     seg([['От угла', 'edge'], ['От центра', 'center'], ['Авто', 'auto']], r.start_from,
       (v) => livePatch({start_from: v})));
 
-  // шов — ± и ввод с клавиатуры (мм)
-  valueRow(el, 'grid', 'Шов', {
-    value: t.joint_mm, fmt: (v) => `${fmtNum(v)} мм`, min: 0.5, max: 10, step: 0.5,
-    onSet: (v) => livePatch({joint_mm: v}),
-  });
-
-  // запас — ± и ввод с клавиатуры (%)
-  valueRow(el, 'package', 'Запас', {
-    value: Math.round(r.waste * 100), fmt: (v) => `${Math.round(v)}%`, min: 0, max: 30, step: 1,
-    onSet: (v) => livePatch({waste: v / 100}),
-  });
-
-  blockRow(el, 'paint', 'Цвет затирки', chips(GROUTS, r.grout, (v) => livePatch({grout: v})));
-
   blockRow(el, 'droplet', 'Вид затирки',
     seg([['Цементная', 'cement'], ['Эпоксидная', 'epoxy']], r.grout_kind,
       (v) => livePatch({grout_kind: v})));
+
+  blockRow(el, 'paint', 'Цвет затирки', chips(GROUTS, r.grout, (v) => livePatch({grout: v})));
 
   inlineRow(el, 'rotate', 'Повернуть плитку',
     `${t.width_mm.toFixed(0)}×${t.height_mm.toFixed(0)} (${t.lying ? 'лёжа' : 'стоя'})`,
@@ -691,9 +700,10 @@ function buildSpec(el, r) {
   toggleRow(el, 'droplet', 'Гидроизоляция', r.waterproofing, (v) => livePatch({waterproofing: v}));
 }
 
-/** Сегмент-переключатель: [[label, value], …]. */
+/** Сегмент-переключатель: [[label, value], …]. 4+ вариантов — сеткой 2×2. */
 function seg(opts, current, onPick) {
-  const node = h(`<div class="seg">${opts.map(([l, v]) =>
+  const wrap = opts.length >= 4 ? ' wrap' : '';
+  const node = h(`<div class="seg${wrap}">${opts.map(([l, v]) =>
     `<button data-v="${esc(v)}" class="${current === v ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>`).firstElementChild;
   node.querySelectorAll('button').forEach((b) => b.onclick = () => {
     // Оптимистично подсвечиваем выбранный — чтобы не ждать render (его может и не быть).
@@ -714,45 +724,61 @@ function chips(opts, current, onPick) {
   return node;
 }
 
-/** Широкий контрол под подписью (раскладка, затирка). */
+/** Контейнер-пара для двух контролов в ряд (Шов+Запас, Пол+Пачка). */
+function ctlPair(el, three = false) {
+  const p = h(`<div class="ctl-pair${three ? ' three' : ''}"></div>`).firstElementChild;
+  el.append(p);
+  return p;
+}
+
+/** Широкий контрол под подписью-разделом (раскладка, затирка, начало ряда).
+ * Иконки из подписей убраны — карточный язык макета; ic принимаем для совместимости. */
 function blockRow(el, ic, lab, control) {
-  const block = h(`<div class="spec-block"><div class="spec-lab">${icon(ic, 'ic')}<span>${esc(lab)}</span></div><div class="spec-ctl"></div></div>`).firstElementChild;
-  block.querySelector('.spec-ctl').append(control);
+  const block = h(`<div class="spec-block"><div class="seclab">${esc(lab)}</div></div>`).firstElementChild;
+  block.append(control);
   el.append(block);
+  void ic;
 }
 
-/** Инлайн-строка: подпись слева, кнопка-значение справа. */
+/** Инлайн-строка карточкой: подпись слева, кнопка-значение справа. */
 function inlineRow(el, ic, lab, valText, onClick) {
-  const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${esc(lab)}</span><button class="chip">${esc(valText)}</button></div>`).firstElementChild;
-  node.querySelector('.chip').onclick = onClick;
+  const node = h(`<div class="ctl inline-row"><span class="lab">${esc(lab)}</span><button class="mini">${esc(valText)}</button></div>`).firstElementChild;
+  node.querySelector('.mini').onclick = onClick;
   el.append(node);
+  void ic;
 }
 
-/** Тумблер. */
-function toggleRow(el, ic, lab, on, onClick) {
+/** Тумблер карточкой: подпись (+ подпись под ней) слева, переключатель справа. */
+function toggleRow(el, ic, lab, on, onClick, sub) {
   // Держит своё состояние: точечный patch НЕ перерисовывает панель, поэтому читать
   // исходный проп в колбэке нельзя — второй клик слал бы то же значение (ровно
   // stale-closure баг, что был у переключателей сантехники). Отдаём НОВОЕ значение.
   let cur = on;
-  const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${esc(lab)}</span><button class="toggle ${on ? 'on' : ''}"></button></div>`).firstElementChild;
+  const node = h(`<div class="ctl toggle-row"><span class="tt"><span class="lab">${esc(lab)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</span><button class="toggle ${on ? 'on' : ''}"></button></div>`).firstElementChild;
   const t = node.querySelector('.toggle');
   t.onclick = () => { cur = !cur; t.classList.toggle('on', cur); onClick(cur); };
   el.append(node);
+  void ic;
 }
 
-/** Размер плитки активной поверхности — тап открывает ввод (в см), меняет размер.
+/** Размер плитки активной поверхности — nav-карточка, тап открывает ввод (в см).
  * У стен и пола плитка своя, поэтому патчим по kind активной поверхности. */
 function sizeRow(el, r) {
   const s = r.surfaces[state.surface] || r.surfaces[0];
   const kindTxt = r.has_floor ? ` · ${s.kind === 'floor' ? 'пол' : 'стены'}` : '';
-  const node = h(`<div class="spec-row">${icon('resize', 'ic')}<span class="lab">Размер плитки${kindTxt}</span>
-    <button class="chip">${s.tile_w.toFixed(0)}×${s.tile_h.toFixed(0)}</button></div>`).firstElementChild;
-  const chip = node.querySelector('.chip');
-  chip.onclick = () => {
+  // Носитель — div, а НЕ button: внутрь по тапу вкладывается <input> (правка размера),
+  // а input внутри button — невалидный HTML, в Telegram WebView теряет фокус/каретку.
+  const node = h(`<div class="ctl navcard" role="button" tabindex="0">
+    <span class="iconbox">${icon('resize', 'ic')}</span>
+    <span class="grow"><span class="clab">Размер плитки${kindTxt}</span>
+      <span class="v" id="tile-size-val">${s.tile_w.toFixed(0)}×${s.tile_h.toFixed(0)}</span></span>
+    ${icon('chevron', 'ic chev')}</div>`).firstElementChild;
+  const valEl = node.querySelector('.v');
+  node.onclick = () => {
     const inp = document.createElement('input');
-    inp.type = 'text'; inp.inputMode = 'decimal'; inp.className = 'cur-input'; inp.style.width = '92px';
+    inp.type = 'text'; inp.inputMode = 'decimal'; inp.className = 'cur-input'; inp.style.width = '96px';
     inp.value = `${fmtNum(s.tile_w / 10)} ${fmtNum(s.tile_h / 10)}`;
-    chip.replaceWith(inp); inp.focus(); inp.select();
+    valEl.replaceWith(inp); inp.focus(); inp.select();
     let done = false;
     const commit = async () => {
       if (done) return; done = true;
@@ -763,19 +789,21 @@ function sizeRow(el, r) {
     };
     inp.addEventListener('blur', commit);
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
+    inp.onclick = (e) => e.stopPropagation();
   };
   el.append(node);
 }
 
-/** Значение с ± И вводом с клавиатуры (тап по числу). */
+/** Значение-степпер карточкой: подпись сверху, ниже «− значение +», тап по числу — ввод. */
 function valueRow(el, ic, lab, {value, fmt, min, max, step, onSet}) {
   const clamp = (v) => Math.min(max, Math.max(min, Math.round(v * 100) / 100));
   let val = value;
-  const node = h(`<div class="spec-row">${icon(ic, 'ic')}<span class="lab">${esc(lab)}</span>
-    <span class="stepper"><button class="minus" aria-label="меньше">−</button>
+  const node = h(`<div class="ctl stepper"><div class="clab">${esc(lab)}</div>
+    <div class="row"><button class="minus" aria-label="меньше">−</button>
     <span class="cur-slot"></span>
-    <button class="plus" aria-label="больше">+</button></span></div>`).firstElementChild;
+    <button class="plus" aria-label="больше">+</button></div></div>`).firstElementChild;
   const slot = node.querySelector('.cur-slot');
+  void ic;
   // Контрол обновляет СВОЙ дисплей сам (без render всей страницы), onSet шлёт патч.
   const paint = () => { slot.innerHTML = `<button class="cur js-num" aria-label="ввести число">${fmt(val)}</button>`; slot.querySelector('.cur').onclick = edit; };
   const set = (v) => { val = clamp(v); paint(); onSet(val); };
@@ -859,7 +887,7 @@ function screenPaper() {
     <h2>Работы</h2><div class="card doc" id="works"></div>
     <div class="doc"><div class="total"><span>РАБОТА</span><span class="num">${esc(e.works_total_text)}</span></div></div>
     <h2>${isAct ? 'Материалы' : 'Материалы — купить'}</h2><div class="card doc" id="mats"></div>
-    <div class="doc"><div class="total"><span>${isAct ? 'ИТОГО К ОПЛАТЕ' : 'ВСЁ ВМЕСТЕ ≈'}</span><span class="num">${esc(isAct ? e.grand_total_text : e.rough_total_text)}</span></div></div>
+    <div class="doc"><div class="total grand"><span>${isAct ? 'ИТОГО К ОПЛАТЕ' : 'ВСЁ ВМЕСТЕ ≈'}</span><span class="num">${esc(isAct ? e.grand_total_text : e.rough_total_text)}</span></div></div>
     ${isAct ? '' : `<p class="hint" style="margin-top:12px">Материалы заказчик покупает сам, в стоимость работы не входят. Цены примерные, для ориентира.</p>`}
     ${e.note ? `<p class="hint">${esc(e.note)}</p>` : ''}</div>`);
   const works = box.querySelector('#works');
