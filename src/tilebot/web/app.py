@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -640,8 +640,19 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
         app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
         @app.get("/")
-        async def index() -> FileResponse:
-            return FileResponse(STATIC / "index.html")
+        async def index() -> Response:
+            # Cache-busting: Telegram WebView агрессивно кэширует app.js/app.css на
+            # устройстве — правка с диска живёт на сервере, а у юзера остаётся старая
+            # (21.07: фикс переключателей сантехники не долетал до Артёма). Версия по
+            # mtime меняет URL при каждой правке → клиент тянет новый файл. Сам
+            # index.html отдаём no-store, чтобы он не залипал со старой версией.
+            html = (STATIC / "index.html").read_text(encoding="utf-8")
+            for name in ("app.js", "app.css"):
+                asset = STATIC / name
+                if asset.exists():
+                    ver = int(asset.stat().st_mtime)
+                    html = html.replace(f"/static/{name}", f"/static/{name}?v={ver}")
+            return Response(html, media_type="text/html", headers={"Cache-Control": "no-store"})
 
     return app
 
