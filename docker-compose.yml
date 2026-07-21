@@ -1,0 +1,37 @@
+# Бот и мини-апп из одного образа. Общая SQLite и логи — через bind-mount на хост
+# (та же папка data/, что и раньше). Статика фронта смонтирована read-only живьём
+# с диска: правка app.js/app.css видна на plitka.mooo.com без пересборки (deploy
+# полагается на это + cache-busting по mtime). Питон-код — внутри образа: смена
+# бэкенда/ядра требует `docker compose up -d --build`, который поднимает ОБА
+# сервиса из одного кода → рассинхрон версий бот↔веб больше невозможен.
+services:
+  bot:
+    build: .
+    image: stroyka-bot:latest
+    command: python -m tilebot.main
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./src/tilebot/web/static:/app/src/tilebot/web/static:ro
+    restart: unless-stopped
+
+  web:
+    build: .
+    image: stroyka-bot:latest
+    command: python -m tilebot.web
+    env_file: .env
+    # Внутри контейнера uvicorn должен слушать 0.0.0.0; наружу порт публикуется
+    # только на 127.0.0.1 хоста — снаружи по-прежнему доступен лишь через nginx.
+    environment:
+      WEB_HOST: "0.0.0.0"
+    ports:
+      - "127.0.0.1:8110:8110"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./src/tilebot/web/static:/app/src/tilebot/web/static:ro
+    # База и таблицы обычно уже созданы ботом; init() всё равно идемпотентен.
+    depends_on:
+      - bot
+    restart: unless-stopped

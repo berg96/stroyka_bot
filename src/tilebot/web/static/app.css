@@ -360,3 +360,4 @@ input:focus { outline: none; border-color: var(--accent); }
 .opening-row .op-x { color: var(--hint); }
 .opening-row .op-del { width: 34px; height: 34px; }
 .opening-row .op-del .ic { color: var(--danger); }
+.build-tag { text-align: center; color: var(--hint); font-size: 11px; opacity: .55; padding: 14px 0 6px; letter-spacing: .02em; }

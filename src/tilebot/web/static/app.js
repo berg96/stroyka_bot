@@ -9,6 +9,11 @@
 const tg = window.Telegram?.WebApp;
 const root = document.getElementById('app');
 
+// Штамп сборки. Зашит в САМ app.js, поэтому показывает, какой JS реально загружен
+// (а не какой отдаёт сервер). Старый штамп на экране = WebView держит старый файл
+// из кэша. Меняй строку при каждом деплое фронта.
+const BUILD = '21.07 · 12:30 · переключатели-fix';
+
 const state = {
   screen: 'list',
   projects: [],
@@ -195,6 +200,7 @@ function screenList() {
   }
   box.querySelector('#new').onclick = () => { state.draft = {step: 'title', title: '', mode: null}; go('create'); };
   box.querySelector('#price').onclick = () => run(async () => { state.price = (await api('/api/me')).price; state.screen = 'price'; });
+  box.append(h(`<div class="build-tag">${esc(BUILD)}</div>`));
   return box;
 }
 
