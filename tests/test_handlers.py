@@ -625,7 +625,9 @@ class TestAppMenuButton:
         btn = app_menu_button("https://plitka.example/app")
         assert isinstance(btn, MenuButtonWebApp)
         assert btn.text == "Приложение"
-        assert btn.web_app.url == "https://plitka.example/app"
+        # URL несёт cache-bust ?v=<mtime app.js>: Telegram кэширует по полному
+        # адресу, новый ?v заставляет открыть свежую страницу, а не залипшую.
+        assert btn.web_app.url.startswith("https://plitka.example/app?v=")
 
     def test_no_url_falls_back_to_the_commands_button(self):
         """Пустой адрес Telegram не примет — возвращаем дефолтную кнопку команд."""

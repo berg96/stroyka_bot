@@ -9,6 +9,8 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     WebAppInfo,
 )
+from pathlib import Path
+
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from tilebot.config import get_settings
@@ -39,8 +41,27 @@ def app_menu_button(webapp_url: str | None = None) -> MenuButtonWebApp | MenuBut
     """
     url = get_settings().webapp_url if webapp_url is None else webapp_url
     if url.startswith("https://"):
-        return MenuButtonWebApp(text="Приложение", web_app=WebAppInfo(url=url))
+        return MenuButtonWebApp(text="Приложение", web_app=WebAppInfo(url=_cache_bust(url)))
     return MenuButtonCommands()
+
+
+def _cache_bust(url: str) -> str:
+    """Добавляет ?v=<mtime app.js> к адресу мини-аппа.
+
+    Telegram WebView кэширует страницу по ПОЛНОМУ URL и держит старый app.js даже
+    при no-store на index — особенно ту копию, что затянул до появления заголовка
+    (ровно этим залип фикс переключателей у мастера). Меняющийся ?v при каждой
+    правке фронта делает URL новым → Telegram открывает свежую страницу, а не
+    залипшую, и мастеру достаточно снова нажать кнопку. Ключ — mtime app.js, тот
+    же, что index() подставляет к самим ассетам, чтобы версии не разъезжались.
+    """
+    asset = Path(__file__).resolve().parent.parent / "web" / "static" / "app.js"
+    try:
+        ver = int(asset.stat().st_mtime)
+    except OSError:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}v={ver}"
 
 AREA_SHAPES = InlineKeyboardMarkup(
     inline_keyboard=[
