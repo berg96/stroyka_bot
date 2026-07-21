@@ -96,16 +96,15 @@ if [ -n "$TOKEN" ]; then
   { echo "DUCKDNS_DOMAIN=${SUB}"; echo "DUCKDNS_TOKEN=${TOKEN}"; } >> "$REPO/.env"
 fi
 
-echo "== сервис мини-аппа =="
-cp "$REPO/deploy/stroyka-web.service" /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now stroyka-web
-# бот перечитывает WEBAPP_URL при старте — кнопка появляется здесь
-systemctl restart stroyka-bot
+echo "== сервисы (docker compose) =="
+# Бот и мини-апп — в контейнерах из одного образа (см. docker-compose.yml).
+# up --build поднимает оба атомарно; бот перечитывает свежий WEBAPP_URL при старте.
+cd "$REPO"
+docker compose up -d --build
 
 echo "== проверка =="
-sleep 2
-systemctl is-active stroyka-web stroyka-bot
+sleep 3
+docker compose ps
 code=$(curl -s -o /dev/null -w '%{http_code}' "https://${DOMAIN}/")
 echo "GET https://${DOMAIN}/ → HTTP $code (ждём 200)"
 auth=$(curl -s -o /dev/null -w '%{http_code}' "https://${DOMAIN}/api/projects")
