@@ -5,9 +5,12 @@
 стоит. Эти тесты держат ту границу.
 """
 
+import json
+
 import pytest
 
-from tilebot.storage import Storage
+from tilebot.core.estimate import PriceList
+from tilebot.storage import Storage, User
 
 SASHA = 383853880
 FRIEND = 111222333
@@ -80,3 +83,31 @@ class TestMoney:
 
         project = await storage.get_project(project.id, SASHA)
         assert project.due == 0
+
+
+class TestPriceSchemaTolerance:
+    """Прайс мастера и поверхности лежат в БД как JSON. Версии бота и мини-аппа
+    гуляют по набору полей — запись НОВЕЕ (лишний ключ) или СТАРЕЕ (нет ключа) не
+    должна ронять смету. Так у Сани 20.07 упала смета: бот на коде без `plastering`
+    читал price_json из веба, где `plastering` уже был → TypeError → «что-то пошло
+    не так». Защита — общий `from_dict` (см. [[core/models.py]])."""
+
+    def test_unknown_field_from_a_newer_version_is_ignored(self):
+        raw = PriceList().__dict__ | {"plastering": 350.0, "totally_new_field": 99}
+        user = User(price_json=json.dumps(raw))
+        price = user.price  # раньше падало TypeError на unexpected keyword
+        assert price.wall_tiling == PriceList().wall_tiling
+
+    def test_missing_field_falls_back_to_default(self):
+        user = User(price_json=json.dumps({"wall_tiling": 1500.0}))
+        price = user.price
+        assert price.wall_tiling == 1500.0
+        assert price.floor_tiling == PriceList().floor_tiling
+
+    def test_surface_tile_survives_an_unknown_field_from_a_newer_app(self):
+        # Тот же риск для плитки: веб дописал плитке поле, бот на старом коде читает.
+        from tilebot.core.models import Tile, from_dict
+
+        stored = Tile(width_mm=600, height_mm=1200).__dict__ | {"future_flag": True}
+        tile = from_dict(Tile, stored)
+        assert tile.width_mm == 600 and tile.height_mm == 1200

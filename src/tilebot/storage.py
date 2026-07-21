@@ -37,6 +37,7 @@ from tilebot.core.models import (
     Surface,
     SurfaceKind,
     Tile,
+    from_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,10 @@ class User(Base):
 
     @property
     def price(self) -> PriceList:
-        return PriceList(**json.loads(self.price_json or "{}"))
+        # from_dict, а не PriceList(**...): прайс мог записать более новый мини-апп с
+        # полем, которого в этой сборке бота ещё нет — прямой распак ронял бы всю
+        # смету (краш у Сани 20.07). Лишние ключи отбрасываем.
+        return from_dict(PriceList, json.loads(self.price_json or "{}"))
 
     @price.setter
     def price(self, value: PriceList) -> None:
@@ -248,11 +252,11 @@ def payload_to_surface(data: dict) -> SavedSurface:
         width_mm=s["width_mm"],
         height_mm=s["height_mm"],
         kind=SurfaceKind(s["kind"]),
-        openings=[Opening(**o) for o in s.get("openings", [])],
+        openings=[from_dict(Opening, o) for o in s.get("openings", [])],
     )
     return SavedSurface(
         surface=surface,
-        tile=Tile(**t),
+        tile=from_dict(Tile, t),
         pattern=LayoutPattern(data["pattern"]),
         start_from=StartFrom(data["start_from"]),
         waterproofing=bool(data.get("waterproofing", False)),

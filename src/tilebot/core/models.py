@@ -4,8 +4,26 @@
 Все линейные размеры внутри ядра — в миллиметрах, площади — в м².
 """
 
+import dataclasses
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TypeVar
+
+_T = TypeVar("_T")
+
+
+def from_dict(cls: type[_T], data: dict) -> _T:
+    """Собрать датакласс из dict, игнорируя незнакомые ключи.
+
+    Прайс и поверхности лежат в БД как JSON, а версии бота и мини-аппа гуляют по
+    набору полей (мини-апп рестартуется на деплое, бот — не всегда). Прямой
+    `Cls(**data)` роняет TypeError на первом же ключе, которого в этой сборке ещё
+    нет — ровно так у Сани 20.07 упала смета (бот без `plastering` читал прайс,
+    записанный вебом с `plastering`). Лишние ключи отбрасываем, недостающие берут
+    дефолты датакласса.
+    """
+    known = {f.name for f in dataclasses.fields(cls)}
+    return cls(**{k: v for k, v in data.items() if k in known})
 
 
 class SurfaceKind(StrEnum):
