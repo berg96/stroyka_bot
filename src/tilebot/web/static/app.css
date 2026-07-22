@@ -311,9 +311,9 @@ input:focus { outline: none; border-color: var(--accent); }
   vertical-align: -2px; margin-right: 6px; border: 1px solid var(--border-strong); }
 
 /* закупка / документ */
-.buy .line, .doc .line { display: flex; justify-content: space-between; gap: 12px;
-  padding: 9px 0; border-bottom: 1px solid var(--border); }
-.buy .line:last-child, .doc .line:last-child { border-bottom: 0; }
+.buy .line, .doc .line, .card > .line { display: flex; justify-content: space-between; gap: 12px;
+  align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.buy .line:last-child, .doc .line:last-child, .card > .line:last-child { border-bottom: 0; }
 .buy .line .q { font-weight: 700; white-space: nowrap; }
 .buy .line .note { color: var(--hint); font-size: 12px; margin-top: 2px; }
 .doc .qty { color: var(--hint); font-size: 13px; margin-top: 2px; }
