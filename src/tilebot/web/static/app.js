@@ -1008,6 +1008,7 @@ function screenCreate() {
   if (d.mode === 'room') {
     field('Стены по кругу, м', 'wallsText', '2 1.8 2 1.8', 'по часовой, через пробел — как мерил');
     field('Высота, м', 'heightText', '2.7');
+    form.append(h(`<div style="height:14px"></div>`));
     toggleRow(form, 'grid', 'Посчитать плитку сейчас', tn.with_tile, (v) => { tn.with_tile = v; render(); });
   } else {
     blockRow(form, 'grid', 'Что меряем', seg([['Стена', 'wall'], ['Пол', 'floor']], d.kind,
