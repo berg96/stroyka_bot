@@ -622,7 +622,7 @@ function screenCanvas() {
   box.querySelector('#estimate').onclick = () => openPaper('estimate');
   box.querySelector('#act').onclick = () => openPaper('act');
   box.querySelector('#money').onclick = () => go('money');
-  box.querySelector('#add').onclick = () => { tg?.showAlert?.('Добавление поверхности — в следующем шаге.'); };
+  box.querySelector('#add').onclick = () => { state.surfdraft = null; go('addsurface'); };
   void s;
   return box;
 }
@@ -931,14 +931,23 @@ function screenMoney() {
 
 // --- экран: прайс ------------------------------------------------------------
 
-const PRICE_FIELDS = [['wall_tiling', 'Укладка на стену, ₽/м²'], ['floor_tiling', 'Укладка на пол, ₽/м²'], ['cutting', 'Подрезка, ₽/шт'], ['grouting', 'Затирка цементной, ₽/м²'], ['grouting_epoxy', 'Затирка эпоксидной, ₽/м²'], ['waterproofing', 'Гидроизоляция, ₽/м²'], ['priming', 'Грунтовка, ₽/м²'], ['demolition', 'Демонтаж, ₽/м²'], ['min_order', 'Мин. чек, ₽']];
+// Прайс по разделам: плитка (её виды считаются ядром) и другие работы (core/works).
+// Сантехника — цены по точкам правятся в самой работе, тут глобального поля нет.
+const PRICE_SECTIONS = [
+  ['Плитка', [['wall_tiling', 'Укладка на стену, ₽/м²'], ['floor_tiling', 'Укладка на пол, ₽/м²'], ['cutting', 'Подрезка, ₽/шт'], ['grouting', 'Затирка цементной, ₽/м²'], ['grouting_epoxy', 'Затирка эпоксидной, ₽/м²'], ['waterproofing', 'Гидроизоляция, ₽/м²'], ['priming', 'Грунтовка, ₽/м²'], ['demolition', 'Демонтаж, ₽/м²']]],
+  ['Другие работы', [['plastering', 'Штукатурка/шпаклёвка, ₽/м²'], ['laminate_laying', 'Укладка ламината, ₽/м²'], ['baseboard_mount', 'Монтаж плинтуса, ₽/пог.м'], ['reveals', 'Откосы, ₽/м²']]],
+  ['Общее', [['min_order', 'Мин. чек, ₽']]],
+];
 
 function screenPrice() {
   const box = h(`<div class="screen"><div class="top"><button class="icon-btn" id="back">${icon('back')}</button><h1>Прайс</h1></div>
     <p class="hint">Твои расценки — по ним считается смета.</p><div id="f"></div>
     <div class="dock"><button class="btn" id="save">Сохранить</button></div></div>`);
   const f = box.querySelector('#f');
-  PRICE_FIELDS.forEach(([k, l]) => f.append(h(`<label class="field"><span class="lab">${l}</span><input type="number" inputmode="decimal" data-k="${k}" value="${state.price[k]}"></label>`)));
+  PRICE_SECTIONS.forEach(([title, fields]) => {
+    f.append(h(`<div class="seclab">${esc(title)}</div>`));
+    fields.forEach(([k, l]) => f.append(h(`<label class="field"><span class="lab">${l}</span><input type="number" inputmode="decimal" data-k="${k}" value="${state.price[k]}"></label>`)));
+  });
   // f останется в DOM после render(), из него и читаем инпуты в клике (не из box —
   // тот к моменту клика опустеет, будучи DocumentFragment).
   box.querySelector('#save').onclick = () => run(async () => { const body = {}; f.querySelectorAll('input[data-k]').forEach((i) => body[i.dataset.k] = parseFloat(i.value || '0')); state.price = await api('/api/price', {method: 'PUT', body}); tg?.HapticFeedback?.notificationOccurred('success'); state.screen = 'list'; state.projects = await api('/api/projects'); });
@@ -1122,6 +1131,51 @@ function screenAddTile() {
   return box;
 }
 
+/** Добавить поверхность к готовому объекту: домерить стену/пол. Раскладку, запас
+ * и гидро берём как у объекта (r) — чтобы новая поверхность не разъехалась с прочими;
+ * потом правится на холсте. */
+function screenAddSurface() {
+  const r = state.project.result;
+  const d = state.surfdraft || (state.surfdraft = {
+    kind: 'wall', sizeText: '', errors: {},
+    tileText: `${fmtNum(r.tile.width_mm / 10)} ${fmtNum(r.tile.height_mm / 10)}`,
+  });
+  const box = h(`<div class="screen">
+    <div class="top"><button class="icon-btn" id="back">${icon('back')}</button><h1>Поверхность</h1></div>
+    <div id="form"></div>
+    <div class="dock"><button class="btn" id="add">Добавить</button></div></div>`);
+  const form = box.querySelector('#form');
+  form.append(seg([['Стена', 'wall'], ['Пол', 'floor']], d.kind, (v) => { d.kind = v; render(); }));
+  form.append(h(`<div style="height:12px"></div>`));
+  textField(form, d, d.kind === 'floor' ? 'Размер пола, м' : 'Размер стены, м', 'sizeText',
+    d.kind === 'floor' ? '2 1.8' : '2 2.7',
+    d.kind === 'floor' ? 'ширина и глубина' : 'ширина и высота');
+  textField(form, d, 'Плитка, см', 'tileText', '60 30', 'можно в см (60 30) или мм (600 300)');
+  form.append(h(`<p class="hint" style="margin-top:12px">Раскладку, запас и гидроизоляцию возьму как у объекта — потом поправишь на холсте.</p>`));
+  box.querySelector('#add').onclick = () => run(() => addSurface(d));
+  box.querySelector('#back').onclick = () => go('canvas');
+  return box;
+}
+
+async function addSurface(d) {
+  d.errors = {};
+  const size = await parseField(d.sizeText, 'size', 'sizeText', d);
+  const tile = await parseField(d.tileText, 'tile', 'tileText', d);
+  if (Object.keys(d.errors).length) { render(); return; }
+  const r = state.project.result;
+  await api(`/api/projects/${state.project.id}/surface`, {method: 'POST', body: {
+    tile: {width_mm: tile[0], height_mm: tile[1], joint_mm: r.tile.joint_mm, thickness_mm: r.tile.thickness_mm, per_pack: r.tile.per_pack},
+    pattern: r.pattern, start_from: r.start_from, waste: r.waste, waterproofing: r.waterproofing,
+    kind: d.kind, width_m: size[0], height_m: size[1],
+  }});
+  state.surfdraft = null;
+  // Открываем холст на НОВОЙ (последней) поверхности.
+  state.project = await api(`/api/projects/${state.project.id}`);
+  state.surface = (state.project.result?.surfaces.length || 1) - 1;
+  state.lastSchemeUrl = null;
+  state.screen = 'canvas';
+}
+
 async function createTile(d) {
   d.errors = {};
   const tile = await parseField(d.tileText, 'tile', 'tileText', d);
@@ -1153,7 +1207,7 @@ function skeletonList() {
 function render() {
   const screens = {
     list: screenList, create: screenCreate, object: screenObject,
-    addwork: screenAddWork, addtile: screenAddTile, work: screenWork, canvas: screenCanvas,
+    addwork: screenAddWork, addtile: screenAddTile, addsurface: screenAddSurface, work: screenWork, canvas: screenCanvas,
     buy: screenBuy, paper: screenPaper, money: screenMoney, price: screenPrice,
     loading: skeletonList,
   };
@@ -1169,6 +1223,7 @@ tg?.BackButton?.onClick(() => {
   if (s === 'object' || s === 'price') loadList();
   else if (s === 'create') { state.draft = null; loadList(); }
   else if (s === 'addtile') { state.tiledraft = null; go('addwork'); }
+  else if (s === 'addsurface') { state.surfdraft = null; go('canvas'); }
   else if (s === 'paper') (state.paper?.fromObject ? go('object') : go('canvas'));
   else if (s === 'buy') go('canvas');
   else backToObject();

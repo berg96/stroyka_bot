@@ -82,7 +82,7 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
     if (/\/deal$/.test(url)) return {ok: true, status: 200, json: async () => ({...PROJECT, deal_amount: body.amount, due: body.amount})};
     if (/\/payments$/.test(url)) return {ok: true, status: 201, json: async () => ({...PROJECT, paid: body.amount, due: 0, payments: [{amount: body.amount, comment: body.comment, at: '2026-07-18T03:00:00'}]})};
     if (/\/title$/.test(url)) return {ok: true, status: 200, json: async () => ({...PROJECT, title: body.title})};
-    if (/\/api\/me$/.test(url)) return {ok: true, status: 200, json: async () => ({id: 1, name: '', phone: '', price: {wall_tiling: 1200, floor_tiling: 1000, cutting: 60, grouting: 200, grouting_epoxy: 450, waterproofing: 400, priming: 100, demolition: 500, min_order: 0}})};
+    if (/\/api\/me$/.test(url)) return {ok: true, status: 200, json: async () => ({id: 1, name: '', phone: '', price: {wall_tiling: 1200, floor_tiling: 1000, cutting: 60, grouting: 200, grouting_epoxy: 450, waterproofing: 400, priming: 100, demolition: 500, min_order: 0, plastering: 350, laminate_laying: 600, baseboard_mount: 200, reveals: 800}})};
     if (/\/api\/price$/.test(url)) return {ok: true, status: 200, json: async () => body};
     if (/\/api\/objects\/1$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => OBJECT()};
     if (/\/api\/objects\/1\/(estimate|act)$/.test(url)) return {ok: true, status: 200, json: async () => ({
@@ -347,6 +347,36 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
     ct.w.document.body.textContent.includes('плиток') && ct.w.document.body.textContent.includes('Список закупки') &&
     ct.calls.some((c) => /scheme\/0\.png/.test(c.url)),
     'после /tile ждал холст плитки');
+
+  console.log('\nПрайс: разделы + цены новых видов работ редактируются');
+  const cpr = makeApp();
+  await wait();
+  cpr.w.document.querySelector('#price').click(); await wait(80);
+  check('прайс: раздел «Другие работы» есть', !!byText(cpr.w, '.seclab', 'Другие работы'));
+  const plasterInp = cpr.w.document.querySelector('input[data-k="plastering"]');
+  check('прайс: поле штукатурки есть и с дефолтом', plasterInp && plasterInp.value === '350',
+    'цену штукатурки нельзя править');
+  plasterInp.value = '420';
+  byText(cpr.w, '.btn', 'Сохранить').click(); await wait(120);
+  check('прайс: сохранение шлёт plastering', cpr.calls.some((c) => /\/api\/price$/.test(c.url) && c.m === 'PUT' && c.body?.plastering === 420),
+    'новое значение не ушло на сервер');
+
+  console.log('\nДобавить поверхность к готовому объекту');
+  const cas = makeApp();
+  await wait();
+  byText(cas.w, '.tile-row', 'Ванная').click(); await wait(80);
+  byText(cas.w, '.tile-row', 'Плитка').click(); await wait(120);
+  byText(cas.w, '.btn', 'Поверхность').click(); await wait(60);
+  check('экран поверхности: сегмент Стена/Пол', !!byText(cas.w, '.seg button', 'Пол') && !!byText(cas.w, '.btn', 'Добавить'));
+  const asIn = [...cas.w.document.querySelectorAll('#form input')];
+  check('экран поверхности: поля размера и плитки', asIn.length === 2);
+  asIn[0].value = '2 2.7'; asIn[0].dispatchEvent(new cas.w.Event('input'));
+  asIn[1].value = '60 30'; asIn[1].dispatchEvent(new cas.w.Event('input'));
+  byText(cas.w, '.btn', 'Добавить').click(); await wait(150);
+  check('поверхность создана (POST /surface с размером и плиткой)',
+    cas.calls.some((c) => /\/surface$/.test(c.url) && c.m === 'POST' && c.body?.width_m && c.body?.tile?.width_mm === 600),
+    'поверхность не отправилась');
+  check('вернулись на холст', cas.w.document.body.textContent.includes('плиток'));
 
   console.log('\nВне Telegram (пустой initData)');
   const out = makeApp({initData: ''});
