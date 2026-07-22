@@ -251,17 +251,19 @@ input:focus { outline: none; border-color: var(--accent); }
 .ctl-pair.three { grid-template-columns: repeat(3, 1fr); }
 
 /* степпер как карточка: подпись сверху, ниже − значение + */
-.stepper { padding: 10px 12px; }
+.stepper { padding: 10px 10px; }
 .stepper .clab { margin-bottom: 8px; display: block; }
-.stepper .row { display: flex; align-items: center; justify-content: space-between; }
+.stepper .row { display: flex; align-items: center; gap: 6px; }
 .stepper button {
-  width: 34px; height: 34px; border-radius: var(--r-sm); border: 1px solid var(--border);
+  width: 32px; height: 32px; border-radius: var(--r-sm); border: 1px solid var(--border);
   background: var(--surface); color: var(--text); font-size: 18px; line-height: 1;
   display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
 }
 .stepper button:active { background: var(--accent-weak); border-color: var(--accent); }
-.stepper .cur-slot { flex: 1; text-align: center; min-width: 0; }
-.stepper .cur { font-weight: 600; font-size: 16px; font-variant-numeric: tabular-nums;
+/* Значение центрируем flex'ом самого слота — text-align на кнопку-значение не влиял.
+ * Число НЕ обрезаем (ellipsis искажал бы цифры) — умещаем компактным шрифтом. */
+.stepper .cur-slot { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; }
+.stepper .cur { font-weight: 600; font-size: 15px; font-variant-numeric: tabular-nums;
   border: 0; background: transparent; color: var(--text); cursor: text; white-space: nowrap; }
 
 /* nav-карточка (Размер плитки): icon-box + подпись/значение + шеврон */
