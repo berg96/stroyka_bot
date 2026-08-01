@@ -10,6 +10,9 @@ callback_data, ввод, который бот молча понял не так
 
 from conftest import SASHA, _room_flow, _tile_qty, _tile_qty_anywhere
 
+from tilebot import receipts
+from tilebot.core.estimate import money
+
 
 class TestJoint:
     async def test_fractional_joint_survives_the_whole_flow(self, app):
@@ -677,3 +680,100 @@ class TestAppMenuButton:
         sent = [m for m in app.session.sent if type(m).__name__ == "SetChatMenuButton"]
         assert sent, "на /start кнопку меню не поставили"
         assert sent[0].chat_id == SASHA
+
+
+class TestExpenses:
+    """Закупки мастера на свои: сумма, что купил, фото чека.
+
+    Кто покупает материалы — ситуативно (Артём, 01.08), поэтому вместо выдуманных
+    цен — факт: чек, который мастер показывает заказчику, и деньги сверху к возврату.
+    """
+
+    async def _money(self, app) -> None:
+        await _room_flow(app)
+        await app.send("📋 Мои объекты")
+        await app.click("Ванная")
+        await app.click("Деньги")
+
+    async def test_expense_adds_to_what_the_customer_owes(self, app, storage):
+        await self._money(app)
+        await app.click("Сумма договора")
+        await app.send("120000")
+        app.forget()
+
+        await app.click("Закупка на свои")
+        await app.send("12400 клей 6 мешков, затирка")
+
+        assert app.said("Записал закупку")
+        assert app.said("клей 6 мешков, затирка")
+        projects = await storage.list_projects(SASHA)
+        assert projects[0].spent == 12400
+        assert projects[0].due == 132400  # работа + закупка, ничего не оплачено
+        assert app.said(money(132400))
+
+    async def test_receipt_photo_is_saved_to_disk(self, app, storage):
+        await self._money(app)
+        await app.click("Закупка на свои")
+        await app.send("6000 грунтовка")
+        await app.click("Прикрепить чек")  # чек — по кнопке к конкретной закупке
+        await app.send_photo("receipt1")
+
+        assert app.said("Чек сохранил")
+        assert "receipt1" in app.downloaded_files(), "фото чека не забрали у Telegram"
+        projects = await storage.list_projects(SASHA)
+        expense = projects[0].expenses[0]
+        assert receipts.path(expense.receipt) is not None, "файл чека не лёг на диск"
+
+    async def test_act_does_not_ask_the_tile_price_when_receipts_are_there(self, app):
+        """Закупки уже записаны чеками — второй раз про плитку не спрашиваем."""
+        await self._money(app)
+        await app.click("Закупка на свои")
+        await app.send("50000 плитка и клей")
+        app.forget()
+
+        await app.click("К объекту")
+        await app.click("Акт выполненных работ")
+
+        assert not app.said("Почём вышла плитка")
+        assert app.said("Материалы по чекам")
+        assert app.said("ИТОГО К ОПЛАТЕ")
+
+    async def test_known_tile_price_survives_a_receipt(self, app):
+        """Закупка НЕ должна гасить уже введённую цену плитки.
+
+        Первая версия глушила её любым чеком: мастер записывал 6 000 ₽ за грунтовку
+        и терял из акта 14 616 ₽ за плитку, а заказчик читал «куплено заказчиком».
+        """
+        await _room_flow(app)
+        await app.click("Акт выполненных работ")
+        await app.send("1450")  # цену плитки мастер вбил — покупал он
+        with_price = next(t for t in app.texts if "ИТОГО К ОПЛАТЕ" in t)
+
+        await app.send("📋 Мои объекты")
+        await app.click("Ванная")
+        await app.click("Деньги")
+        await app.click("Закупка на свои")
+        await app.send("6000 грунтовка")
+        app.forget()
+        await app.click("К объекту")
+        await app.click("Акт выполненных работ")
+        after = next(t for t in app.texts if "ИТОГО К ОПЛАТЕ" in t)
+
+        assert "куплено заказчиком" not in after.split("Плитка 600×300")[1][:60]
+        assert "Материалы по чекам" in after
+        assert "убери её из одного места" in after, "про риск задвоения надо сказать прямо"
+        assert money(50112) in after, "цена плитки пропала из акта из-за чека"
+        assert money(6000) in after
+        assert money(49788 + 50112 + 6000) in after  # работа + плитка + чек
+        assert money(50112) in with_price
+
+    async def test_menu_still_works_while_the_bot_waits_for_a_receipt(self, app):
+        """Ожидание чека не должно глушить главное меню — кэтч-олл ловил всё подряд."""
+        await self._money(app)
+        await app.click("Закупка на свои")
+        await app.send("6000 грунтовка")
+        await app.click("Прикрепить чек")
+        app.forget()
+
+        await app.send("💰 Прайс")
+        assert app.said("Твой прайс"), "кнопка меню умерла в ожидании фото"

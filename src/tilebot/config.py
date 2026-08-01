@@ -6,6 +6,8 @@ class Settings(BaseSettings):
 
     bot_token: str
     db_path: str = "data/tilebot.sqlite3"
+    # Фото чеков закупок — файлами рядом с базой (в контейнере это bind-mount).
+    receipts_dir: str = "data/receipts"
     admin_id: int = 0  # кому слать ошибки; 0 — никому
 
     # Мини-апп. Наружу его выставляет nginx, uvicorn слушает только локально.

@@ -29,15 +29,25 @@ const state = {
 
 // --- сервер ------------------------------------------------------------------
 
-async function api(path, {method = 'GET', body} = {}) {
+async function api(path, {method = 'GET', body, form} = {}) {
+  // С формой Content-Type НЕ ставим: браузер сам допишет boundary, иначе сервер
+  // не разберёт составное тело и вернёт 422 на пустом месте.
   const res = await fetch(path, {
     method,
-    headers: {'Content-Type': 'application/json', 'X-Init-Data': tg?.initData || ''},
-    body: body ? JSON.stringify(body) : undefined,
+    headers: form ? {'X-Init-Data': tg?.initData || ''}
+      : {'Content-Type': 'application/json', 'X-Init-Data': tg?.initData || ''},
+    body: form || (body ? JSON.stringify(body) : undefined),
   });
   const data = res.status === 204 ? null : await res.json().catch(() => null);
   if (!res.ok) throw new Error(data?.error || 'Что-то пошло не так на сервере.');
   return data;
+}
+
+/** Картинка из-под initData: <img src> не пошлёт заголовок, поэтому тянем blob'ом. */
+async function apiBlob(path) {
+  const res = await fetch(path, {headers: {'X-Init-Data': tg?.initData || ''}});
+  if (!res.ok) throw new Error('Картинка не открылась.');
+  return URL.createObjectURL(await res.blob());
 }
 
 const measure = (kind, text) => api('/api/measure', {method: 'POST', body: {kind, text}});
@@ -849,12 +859,22 @@ function openViewer() {
   document.body.append(v);
 }
 
+/** Чек — тем же путём, что схема: эндпоинт закрыт initData, поэтому blob, а не src.
+ * Показываем как есть: мастер открывает его, чтобы показать заказчику с экрана. */
+async function openReceipt(expenseId) {
+  const url = await apiBlob(`/api/expenses/${expenseId}/receipt`);
+  const v = h(`<div class="viewer"><img src="${url}" alt="Чек">
+    <div class="vbtns"><button class="close">Закрыть</button></div></div>`).firstElementChild;
+  const close = () => { v.remove(); URL.revokeObjectURL(url); };
+  v.querySelector('.close').onclick = close;
+  v.addEventListener('click', (e) => { if (e.target === v) close(); });
+  document.body.append(v);
+}
+
 /** Схема — картинкой с сервера (за проверкой initData, тянем blob'ом). */
 async function loadScheme(img, projectId, index) {
   try {
-    const res = await fetch(`/api/projects/${projectId}/scheme/${index}.png`, {headers: {'X-Init-Data': tg?.initData || ''}});
-    if (!res.ok) return;
-    const url = URL.createObjectURL(await res.blob());
+    const url = await apiBlob(`/api/projects/${projectId}/scheme/${index}.png`);
     state.lastSchemeUrl = url;
     img.src = url;
     img.classList.remove('computing');
@@ -887,6 +907,7 @@ function screenPaper() {
     <h2>Работы</h2><div class="card doc" id="works"></div>
     <div class="doc"><div class="total${isAct ? '' : ' grand'}"><span>РАБОТА</span><span class="num">${esc(e.works_total_text)}</span></div></div>
     <h2>${isAct ? 'Материалы' : 'Материалы — купить'}</h2><div class="card doc" id="mats"></div>
+    ${isAct && e.receipts_total ? `<div class="doc"><div class="total"><span>Материалы по чекам</span><span class="num">${money(e.receipts_total)}</span></div></div>` : ''}
     ${isAct
       ? `<div class="doc"><div class="total grand"><span>ИТОГО К ОПЛАТЕ</span><span class="num">${esc(e.grand_total_text)}</span></div></div>`
       : `<p class="hint" style="margin-top:12px">Материалы заказчик покупает сам — в стоимость работы они не входят.</p>`}
@@ -909,8 +930,9 @@ function screenMoney() {
     <button class="icon-btn" id="back">${icon('back')}</button><h1>Деньги</h1></div>
     <div class="card">
       <div class="line"><span>Договорились</span><b class="num">${money(p.deal_amount)}</b></div>
+      ${p.spent ? `<div class="line"><span>Закупки на свои</span><b class="num">${money(p.spent)}</b></div>` : ''}
       <div class="line"><span>Получено</span><b class="num">${money(p.paid)}</b></div>
-      <div class="line"><span>Остаток</span><b class="num ${p.due > 0 ? '' : ''}" style="color:${p.due > 0 ? 'var(--danger)' : 'var(--ok)'}">${money(p.due)}</b></div>
+      <div class="line"><span>Остаток</span><b class="num" style="color:${p.due > 0 ? 'var(--danger)' : 'var(--ok)'}">${money(p.due)}</b></div>
     </div>
     <label class="field"><span class="lab">Сумма договора, ₽</span><input type="number" inputmode="decimal" id="deal" value="${p.deal_amount || ''}"></label>
     <button class="btn secondary" id="save-deal" style="margin-top:10px">Записать договор</button>
@@ -918,9 +940,30 @@ function screenMoney() {
     <div class="two"><input type="number" inputmode="decimal" id="pay" placeholder="30000"><input type="text" id="comment" placeholder="аванс"></div>
     <button class="btn" id="add-pay" style="margin-top:10px">Записать приход</button>
     ${p.payments.length ? '<h2>Приходы</h2>' : ''}<div class="card doc" id="pays" ${p.payments.length ? '' : 'style="display:none"'}></div>
+    <div class="seclab">Купил на свои — заказчик вернёт</div>
+    <div class="two"><input type="number" inputmode="decimal" id="exp" placeholder="12400"><input type="text" id="expnote" placeholder="клей, затирка"></div>
+    <label class="ctl navcard" style="margin-top:10px">
+      <span class="iconbox">${icon('image', 'ic')}</span>
+      <span class="grow"><span class="clab">Фото чека</span>
+        <span class="v" id="receipt-name">не выбрано — необязательно</span></span>
+      <input type="file" accept="image/*" id="receipt" hidden></label>
+    <button class="btn secondary" id="add-exp" style="margin-top:10px">Записать закупку</button>
+    ${p.expenses?.length ? '<h2>Закупки</h2>' : ''}<div class="card doc" id="exps" ${p.expenses?.length ? '' : 'style="display:none"'}></div>
     </div>`);
   const pays = box.querySelector('#pays');
   p.payments.forEach((x) => pays.append(h(`<div class="line"><div class="grow"><div>${esc(x.comment || 'платёж')}</div><div class="qty">${esc(x.at.slice(0, 10))}</div></div><div class="q num">${money(x.amount)}</div></div>`)));
+  const exps = box.querySelector('#exps');
+  (p.expenses || []).forEach((x) => {
+    const row = h(`<div class="line"><div class="grow"><div>${esc(x.comment || 'закупка')}</div><div class="qty">${esc(x.at.slice(0, 10))}${x.receipt ? ' · чек' : ''}</div></div><div class="q num">${money(x.amount)}</div><button class="icon-btn del" aria-label="Убрать">${icon('trash')}</button></div>`);
+    const el = row.firstElementChild;
+    // Ссылки берём здесь: после append фрагмент опустеет, в колбэке будет null.
+    const del = el.querySelector('.del');
+    if (x.receipt) { el.querySelector('.grow').style.cursor = 'pointer'; el.querySelector('.grow').onclick = () => openReceipt(x.id).catch(fail); }
+    del.onclick = () => run(async () => {
+      Object.assign(state.project, await api(`/api/expenses/${x.id}`, {method: 'DELETE'}));
+    });
+    exps.append(row);
+  });
   // Ссылки на инпуты берём СЕЙЧАС: box — это DocumentFragment, после render() он
   // вставится в DOM и опустеет, и box.querySelector в клике вернул бы null.
   const dealInp = box.querySelector('#deal');
@@ -928,6 +971,24 @@ function screenMoney() {
   const commentInp = box.querySelector('#comment');
   box.querySelector('#save-deal').onclick = () => run(async () => { const a = parseFloat(dealInp.value || '0'); Object.assign(state.project, await api(`/api/projects/${p.id}/deal`, {method: 'PUT', body: {amount: a}})); });
   box.querySelector('#add-pay').onclick = () => run(async () => { const a = parseFloat(payInp.value || '0'); if (!(a > 0)) throw new Error('Сумма прихода — больше нуля.'); Object.assign(state.project, await api(`/api/projects/${p.id}/payments`, {method: 'POST', body: {amount: a, comment: commentInp.value}})); });
+  const expInp = box.querySelector('#exp');
+  const expNote = box.querySelector('#expnote');
+  const receiptInp = box.querySelector('#receipt');
+  // Голая системная кнопка выбора файла («Choose File») выпадала из карточного
+  // языка и была на английском — прячем её под карточку-лейбл, имя показываем сами.
+  const receiptName = box.querySelector('#receipt-name');
+  receiptInp.onchange = () => {
+    receiptName.textContent = receiptInp.files?.[0]?.name || 'не выбрано — необязательно';
+  };
+  box.querySelector('#add-exp').onclick = () => run(async () => {
+    const a = parseFloat(expInp.value || '0');
+    if (!(a > 0)) throw new Error('Сумма закупки — больше нуля.');
+    const form = new FormData();
+    form.append('amount', String(a));
+    form.append('comment', expNote.value || '');
+    if (receiptInp.files && receiptInp.files[0]) form.append('receipt', receiptInp.files[0]);
+    Object.assign(state.project, await api(`/api/projects/${p.id}/expenses`, {method: 'POST', form}));
+  });
   box.querySelector('#back').onclick = () => (state.object ? go('object') : go('canvas'));
   return box;
 }

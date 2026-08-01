@@ -4,6 +4,7 @@ import math
 import pytest
 from PIL import Image
 
+from tilebot import receipts
 from tilebot.core.angled import angled_pieces, polygon_area
 from tilebot.core.estimate import (
     PriceList,
@@ -868,3 +869,30 @@ class TestWrapAroundEconomy:
         assert not supports_wrap(LayoutPattern.HERRINGBONE)
         with pytest.raises(ValueError):
             self._lays(LayoutPattern.HERRINGBONE)
+
+
+class TestReceiptFiles:
+    """Файлы чеков: имя из БД — единственный ключ, и оно не должно выпускать за каталог."""
+
+    def test_traversal_names_are_refused(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(receipts, "DIR", tmp_path)
+        (tmp_path / "secret.env").write_bytes(b"token")
+
+        assert receipts.path("../secret.env") is None
+        assert receipts.path("/etc/passwd") is None
+        assert receipts.path("secret.env") is None
+        assert receipts.path("") is None
+
+    def test_saved_receipt_is_readable_back(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(receipts, "DIR", tmp_path / "r")
+        name = receipts.save(7, b"jpeg-bytes", ".jpg")
+
+        assert receipts.path(name).read_bytes() == b"jpeg-bytes"
+        receipts.remove(name)
+        assert receipts.path(name) is None
+
+    def test_only_pictures_are_accepted(self):
+        assert receipts.ext_of("чек.JPG") == ".jpg"
+        assert receipts.ext_of("чек.pdf") == ""
+        assert receipts.ext_of_type("image/png") == ".png"  # пикер без имени файла
+        assert receipts.ext_of_type("application/pdf") == ""

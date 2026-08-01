@@ -60,7 +60,8 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
   w.URL.createObjectURL = () => 'blob:scheme';
   w.fetch = async (url, o = {}) => {
     const m = o.method || 'GET';
-    const body = o.body ? JSON.parse(o.body) : null;
+    const isForm = o.body && typeof o.body !== 'string';
+    const body = o.body && !isForm ? JSON.parse(o.body) : null;
     calls.push({m, url, body});
     if (/scheme\/\d+\.png/.test(url)) return {ok: true, status: 200, blob: async () => new w.Blob([1])};
     if (/\/api\/measure$/.test(url)) {
@@ -81,6 +82,15 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
     if (/\/api\/projects\/1\/tile$/.test(url) && m === 'POST') return {ok: true, status: 201, json: async () => baseResult()};
     if (/\/deal$/.test(url)) return {ok: true, status: 200, json: async () => ({...PROJECT, deal_amount: body.amount, due: body.amount})};
     if (/\/payments$/.test(url)) return {ok: true, status: 201, json: async () => ({...PROJECT, paid: body.amount, due: 0, payments: [{amount: body.amount, comment: body.comment, at: '2026-07-18T03:00:00'}]})};
+    if (/\/api\/expenses\/7$/.test(url) && m === 'DELETE')
+      return {ok: true, status: 200, json: async () => ({...PROJECT, spent: 0, expenses: []})};
+    if (/\/expenses$/.test(url) && m === 'POST') {
+      // multipart: тела в JSON нет, читаем FormData
+      const f = o.body;
+      const amount = parseFloat(f.get('amount'));
+      return {ok: true, status: 201, json: async () => ({...PROJECT, spent: amount, due: 50000 + amount,
+        expenses: [{id: 7, amount, comment: f.get('comment') || '', at: '2026-08-01T10:00:00', receipt: !!f.get('receipt')}]})};
+    }
     if (/\/title$/.test(url)) return {ok: true, status: 200, json: async () => ({...PROJECT, title: body.title})};
     if (/\/api\/me$/.test(url)) return {ok: true, status: 200, json: async () => ({id: 1, name: '', phone: '', price: {wall_tiling: 1200, floor_tiling: 1000, cutting: 60, grouting: 200, grouting_epoxy: 450, waterproofing: 400, priming: 100, demolition: 500, min_order: 0, plastering: 350, laminate_laying: 600, baseboard_mount: 200, reveals: 800}})};
     if (/\/api\/price$/.test(url)) return {ok: true, status: 200, json: async () => body};
@@ -283,6 +293,21 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   check('приход записан без ошибки', c4.calls.some((c) => /\/payments$/.test(c.url)) && !c4.errs.length,
     c4.errs[0] || '');
   check('получено обновилось', c4.w.document.body.textContent.includes('20 000'));
+
+  // Закупки мастера на свои: сумма + приписка (+ чек) → в долг заказчика.
+  c4.w.document.querySelector('#exp').value = '12400';
+  c4.w.document.querySelector('#expnote').value = 'клей, затирка';
+  byText(c4.w, '.btn', 'Записать закупку').click(); await wait(120);
+  const expCall = c4.calls.find((c) => /\/expenses$/.test(c.url) && c.m === 'POST');
+  check('закупка ушла формой (не JSON)', expCall && typeof expCall.body !== 'string' && !c4.errs.length,
+    c4.errs[0] || 'тело должно быть FormData — с ним едет файл чека');
+  check('закупка видна на экране', c4.w.document.body.textContent.includes('12 400')
+    && c4.w.document.body.textContent.includes('клей, затирка'));
+  check('остаток пересчитан с закупкой', c4.w.document.body.textContent.includes('62 400'));
+  // Опечатку в сумме надо уметь убрать — иначе она навсегда в долге заказчика.
+  c4.w.document.querySelector('#exps .del').click(); await wait(120);
+  check('закупку можно удалить', c4.calls.some((c) => /\/api\/expenses\/7$/.test(c.url) && c.m === 'DELETE')
+    && !c4.w.document.body.textContent.includes('12 400') && !c4.errs.length, c4.errs[0] || '');
 
   console.log('\nПереименование объекта');
   const c5 = makeApp();

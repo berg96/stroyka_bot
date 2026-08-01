@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
+from tilebot import receipts
 from tilebot.bot import keyboards as kb
 from tilebot.core.estimate import money
 from tilebot.core.parse import ParseError, amount_and_comment, single_number
@@ -21,6 +22,8 @@ router = Router(name="money")
 class Money(StatesGroup):
     deal = State()
     payment = State()
+    expense = State()
+    receipt = State()
 
 
 def _card(project: Project) -> str:
@@ -41,11 +44,24 @@ def _card(project: Project) -> str:
     else:
         lines.append("\nПлатежей пока нет.")
 
-    if project.deal_amount:
+    if project.expenses:
+        lines.append("")
+        lines.append("<b>Закупки на свои</b>")
+        for e in sorted(project.expenses, key=lambda x: x.created_at):
+            when = e.created_at.strftime("%d.%m")
+            note = f" — {e.comment}" if e.comment else ""
+            paper = " 🧾" if e.receipt else ""
+            lines.append(f"• {when}: {money(e.amount)}{note}{paper}")
+        lines.append(f"\nЗакупил на: <b>{money(project.spent)}</b>")
+
+    if project.deal_amount or project.spent:
+        lines.append("")
         if project.due > 0:
-            lines.append(f"Остаток с заказчика: <b>{money(project.due)}</b>")
-        elif project.paid > project.deal_amount:
-            lines.append(f"Переплата: <b>{money(project.paid - project.deal_amount)}</b>")
+            tail = " (работа + закупки)" if project.spent else ""
+            lines.append(f"Остаток с заказчика: <b>{money(project.due)}</b>{tail}")
+        elif project.paid > project.deal_amount + project.spent:
+            over = project.paid - project.deal_amount - project.spent
+            lines.append(f"Переплата: <b>{money(over)}</b>")
         else:
             lines.append("✅ Рассчитались полностью.")
 
@@ -151,3 +167,91 @@ async def debts(message: Message, storage: Storage) -> None:
     lines.append(f"\nВсего: <b>{money(sum(p.due for p in owing))}</b>")
 
     await message.answer("\n".join(lines), reply_markup=kb.projects_list(owing))
+
+
+# --- закупки мастера на свои -------------------------------------------------
+
+
+@router.callback_query(F.data.startswith("addexp:"))
+async def ask_expense(call: CallbackQuery, state: FSMContext) -> None:
+    """Мастер купил материалы на свои — заказчик вернёт деньги по чеку.
+
+    Позиции не спрашиваем: Саня на объекте, с телефона в руках; сумма и «что взял»
+    одной строкой — это он напишет, а таблицу позиций набивать не станет.
+    """
+    project_id = int(call.data.split(":")[1])
+    await state.update_data(project_id=project_id)
+    await state.set_state(Money.expense)
+    await call.answer()
+    await call.message.answer(
+        "Сколько потратил и на что?\n\n"
+        "<code>12400 клей 6 мешков, затирка</code>\n"
+        "<code>6000 грунтовка и СВП</code>\n\n"
+        "<i>Можно просто сумму. Дальше пришлёшь фото чека — или пропустишь.</i>"
+    )
+
+
+@router.message(Money.expense)
+async def add_expense(message: Message, state: FSMContext, storage: Storage) -> None:
+    try:
+        amount, comment = amount_and_comment(message.text or "")
+    except ParseError as e:
+        await message.answer(f"{e}\n\nПример: <code>12400 клей и затирка</code>")
+        return
+    if amount > 100_000_000:  # промах по нулю на телефоне уехал бы в долг заказчика
+        await message.answer("Столько за раз не закупают — проверь сумму.")
+        return
+
+    data = await state.get_data()
+    expense_id = await storage.add_expense(
+        data["project_id"], message.from_user.id, amount, comment
+    )
+    if expense_id is None:
+        await state.clear()
+        await message.answer("Объект не найден.", reply_markup=kb.MAIN_MENU)
+        return
+
+    await state.clear()
+    head = f"Записал закупку: <b>{money(amount)}</b>" + (f" — {comment}" if comment else "")
+    project = await storage.get_project(data["project_id"], message.from_user.id)
+    # Ждать фото «просто так» нельзя: пока бот в этом состоянии, кнопки меню мертвы,
+    # а случайное фото (плитки, объекта) прилипло бы чеком. Поэтому чек — по кнопке.
+    await message.answer(
+        f"{head}\n\n{_card(project)}", reply_markup=kb.money_actions(project.id, expense_id)
+    )
+
+
+@router.callback_query(F.data.startswith("addreceipt:"))
+async def ask_receipt(call: CallbackQuery, state: FSMContext) -> None:
+    expense_id = int(call.data.split(":")[1])
+    await state.update_data(expense_id=expense_id)
+    await state.set_state(Money.receipt)
+    await call.answer()
+    await call.message.answer(
+        "Пришли <b>фото чека</b> — покажешь его заказчику.\n\n"
+        "<i>Передумал — /cancel, закупка уже записана.</i>"
+    )
+
+
+@router.message(Money.receipt, F.photo)
+async def save_receipt(message: Message, state: FSMContext, storage: Storage) -> None:
+    data = await state.get_data()
+    # Самый крупный размер: чек надо будет читать глазами, превью не годится.
+    file = await message.bot.get_file(message.photo[-1].file_id)
+    buf = await message.bot.download_file(file.file_path)
+    expense = await storage.get_expense(data["expense_id"], message.from_user.id)
+    if expense is None:  # закупку успели удалить, пока мастер искал чек
+        await state.clear()
+        await message.answer("Этой закупки уже нет.", reply_markup=kb.MAIN_MENU)
+        return
+
+    name = receipts.save(expense.id, buf.read())
+    await storage.set_expense_receipt(expense.id, message.from_user.id, name)
+
+    await state.clear()
+    project = await storage.get_project(expense.project_id, message.from_user.id)
+    await message.answer(
+        f"Чек сохранил.\n\n{_card(project)}", reply_markup=kb.money_actions(project.id)
+    )
+
+

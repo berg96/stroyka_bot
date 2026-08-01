@@ -314,9 +314,14 @@ def project_actions(project_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def money_actions(project_id: int) -> InlineKeyboardMarkup:
+def money_actions(project_id: int, expense_id: int | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    # Чек прикладывается по кнопке к КОНКРЕТНОЙ закупке: ждать фото «просто так»
+    # значит глушить меню и ловить случайные фото.
+    if expense_id is not None:
+        b.button(text="📎 Прикрепить чек", callback_data=f"addreceipt:{expense_id}")
     b.button(text="➕ Записать платёж", callback_data=f"addpay:{project_id}")
+    b.button(text="🧾 Закупка на свои", callback_data=f"addexp:{project_id}")
     b.button(text="✏️ Сумма договора", callback_data=f"setdeal:{project_id}")
     b.button(text="📷 Фото объекта", callback_data=f"addphoto:{project_id}")
     b.button(text="⬅️ К объекту", callback_data=f"open:{project_id}")

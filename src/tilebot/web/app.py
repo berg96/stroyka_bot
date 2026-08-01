@@ -16,12 +16,13 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from tilebot import receipts
 from tilebot.config import Settings, get_settings
 from tilebot.core.estimate import (
     Estimate,
@@ -82,6 +83,7 @@ def _tg_id(init_data: str, settings: Settings) -> int:
 def create_app(storage: Storage | None = None, settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     store = storage or Storage(settings.db_path)
+    receipts.DIR = Path(settings.receipts_dir)
 
     app = FastAPI(title="Помощник плиточника", docs_url=None, redoc_url=None)
 
@@ -484,7 +486,8 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
             est = build_estimate(
                 project.title, res.layouts, res.materials, price,
                 waterproofing=any(s.waterproofing for s in saved),
-                grout_kind=saved[-1].grout_kind, include_materials_cost=materials_cost,
+                grout_kind=saved[-1].grout_kind,
+                include_materials_cost=materials_cost,
             )
             for w in est.works:
                 add_work(w.name, w.qty, w.unit, w.price)
@@ -521,13 +524,15 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
 
         works_total = sum(w["total"] for w in works_out)
         mats_total = sum(m["cost"] or 0 for m in materials_out)
-        grand = works_total + mats_total
+        receipts_total = project.spent if materials_cost else 0.0
+        grand = works_total + mats_total + receipts_total
         return {
             "title": project.title,
             "works": works_out,
             "works_total": works_total, "works_total_text": money(works_total),
             "materials": materials_out,
             "materials_total": mats_total,
+            "receipts_total": receipts_total,
             "grand_total": grand, "grand_total_text": money(grand),
             "note": "", "price": asdict(price),
         }
@@ -653,6 +658,8 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
             grout_kind=saved_all[-1].grout_kind,
             include_materials_cost=include_materials_cost,
         )
+        if include_materials_cost:
+            est.receipts_total = project.spent
         return _estimate_json(est, price=record.price)
 
     # --- прайс, деньги --------------------------------------------------------
@@ -693,6 +700,66 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
         if not await store.add_payment(project_id, user, body.amount, body.comment):
             raise HTTPException(status_code=404, detail=NOT_FOUND)
         return _project_brief(await owned(project_id, user))
+
+    @app.post("/api/projects/{project_id}/expenses", status_code=201)
+    async def add_expense(
+        project_id: int,
+        user: User,
+        amount: Annotated[float, Form()],
+        comment: Annotated[str, Form()] = "",
+        receipt: Annotated[UploadFile | None, File()] = None,
+    ) -> dict:
+        """Закупка мастера на свои. Форма, а не JSON: с ней приезжает фото чека."""
+        if not 0 < amount <= 100_000_000:
+            raise HTTPException(status_code=422, detail="Сумма — больше нуля.")
+
+        data = b""
+        ext = ""
+        if receipt is not None and receipt.filename:
+            # Пикер андроида умеет отдать файл без расширения — тогда верим типу.
+            ext = receipts.ext_of(receipt.filename) or receipts.ext_of_type(receipt.content_type)
+            if not ext:
+                raise HTTPException(status_code=422, detail="Чек — картинкой: jpg, png или webp.")
+            if (receipt.size or 0) > receipts.MAX_BYTES:  # до чтения в память
+                raise HTTPException(status_code=422, detail="Чек тяжелее 10 МБ.")
+            data = await receipt.read()
+            if len(data) > receipts.MAX_BYTES:
+                raise HTTPException(status_code=422, detail="Чек тяжелее 10 МБ.")
+
+        expense_id = await store.add_expense(project_id, user, amount, comment[:200])
+        if expense_id is None:
+            raise HTTPException(status_code=404, detail=NOT_FOUND)
+        if data:
+            # Закупка уже записана. Если чек не лёг — не роняем запрос: мастер
+            # повторил бы «Записать закупку» и раздвоил долг заказчика.
+            try:
+                await store.set_expense_receipt(
+                    expense_id, user, receipts.save(expense_id, data, ext)
+                )
+            except OSError:
+                logger.exception("Чек к закупке %s не сохранился", expense_id)
+        return _project_brief(await owned(project_id, user))
+
+    @app.delete("/api/expenses/{expense_id}")
+    async def delete_expense(expense_id: int, user: User) -> dict:
+        expense = await store.get_expense(expense_id, user)
+        if expense is None:
+            raise HTTPException(status_code=404, detail="Закупка не найдена.")
+        project_id, name = expense.project_id, expense.receipt
+        await store.delete_expense(expense_id, user)
+        receipts.remove(name)
+        return _project_brief(await owned(project_id, user))
+
+    @app.get("/api/expenses/{expense_id}/receipt")
+    async def get_receipt(expense_id: int, user: User) -> Response:
+        expense = await store.get_expense(expense_id, user)
+        file = receipts.path(expense.receipt) if expense else None
+        if file is None:
+            raise HTTPException(status_code=404, detail="Чека нет.")
+        media = "image/png" if file.suffix == ".png" else "image/jpeg"
+        if file.suffix == ".webp":
+            media = "image/webp"
+        return Response(content=file.read_bytes(), media_type=media)
 
     # --- статика --------------------------------------------------------------
 
@@ -742,6 +809,17 @@ def _project_brief(project: Project) -> dict:
         "payments": [
             {"amount": p.amount, "comment": p.comment, "at": p.created_at.isoformat()}
             for p in sorted(project.payments, key=lambda p: p.created_at)
+        ],
+        "spent": project.spent,
+        "expenses": [
+            {
+                "id": e.id,
+                "amount": e.amount,
+                "comment": e.comment,
+                "at": e.created_at.isoformat(),
+                "receipt": bool(e.receipt),
+            }
+            for e in sorted(project.expenses, key=lambda e: e.created_at)
         ],
     }
 
@@ -841,6 +919,7 @@ def _estimate_json(est: Estimate, *, price: PriceList) -> dict:
         "works_total_text": money(est.works_total),
         "materials": materials,
         "materials_total": est.materials_total,
+        "receipts_total": est.receipts_total,
         "grand_total": est.grand_total,
         "grand_total_text": money(est.grand_total),
         "note": est.note,

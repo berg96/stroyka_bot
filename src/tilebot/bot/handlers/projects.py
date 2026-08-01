@@ -171,8 +171,10 @@ async def act(call: CallbackQuery, state: FSMContext, storage: Storage) -> None:
         await call.message.answer(NOT_YOURS if not project else "В объекте нет поверхностей.")
         return
 
+    # Если мастер уже записал закупки чеками («Деньги»), цену плитки не спрашиваем:
+    # это тот же кошелёк, и в акте она встала бы второй раз.
     known_price = any(payload_to_surface(r.dump()).tile.price_per_m2 for r in project.surfaces)
-    if not known_price:
+    if not known_price and not project.spent:
         await state.update_data(project_id=project_id)
         await state.set_state(Tiling.price)
         await call.message.answer(
@@ -202,6 +204,7 @@ async def show_act(message: Message, user_id: int, storage: Storage, project_id:
         grout_kind=grout_kind,
         include_materials_cost=True,
     )
+    est.receipts_total = project.spent
     await message.answer(format_act(est), reply_markup=kb.project_actions(project_id))
 
 

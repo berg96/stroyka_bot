@@ -26,6 +26,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, selectinload
 
+from tilebot import receipts
 from tilebot.core.estimate import PriceList
 from tilebot.core.models import (
     DEFAULT_OFFSET,
@@ -96,6 +97,9 @@ class Project(Base):
     payments: Mapped[list["Payment"]] = relationship(
         back_populates="project", cascade="all, delete-orphan", lazy="selectin"
     )
+    expenses: Mapped[list["Expense"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", lazy="selectin"
+    )
     photos: Mapped[list["Photo"]] = relationship(
         back_populates="project", cascade="all, delete-orphan", lazy="selectin"
     )
@@ -109,9 +113,18 @@ class Project(Base):
         return sum(p.amount for p in self.payments)
 
     @property
+    def spent(self) -> float:
+        """Сколько мастер закупил на свои — заказчик возвращает это сверх работы."""
+        return sum(e.amount for e in self.expenses)
+
+    @property
     def due(self) -> float:
-        """Сколько заказчик ещё должен. Отрицательного долга не бывает — это переплата."""
-        return max(0.0, self.deal_amount - self.paid)
+        """Сколько заказчик ещё должен. Отрицательного долга не бывает — это переплата.
+
+        Закупки мастера входят в долг: он купил материалы на свои и показывает чек,
+        заказчик возвращает деньги сверх суммы за работу.
+        """
+        return max(0.0, self.deal_amount + self.spent - self.paid)
 
 
 class Payment(Base):
@@ -130,6 +143,29 @@ class Payment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     project: Mapped[Project] = relationship(back_populates="payments")
+
+
+class Expense(Base):
+    """Закупка мастера на свои: сумма, что купил, фото чека.
+
+    Кто покупает материалы — мастер или заказчик — ситуативно, поэтому справочных
+    цен мы не считаем (см. core/estimate.py). Вместо них факт: мастер показывает
+    чек, заказчик возвращает деньги. Отсюда и место — «Деньги», а не смета.
+
+    Чек лежит файлом на диске, а не file_id в Telegram: его показывает и мини-апп,
+    которому file_id бесполезен.
+    """
+
+    __tablename__ = "expenses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    amount: Mapped[float] = mapped_column(Float)
+    comment: Mapped[str] = mapped_column(String(200), default="")  # «клей 6 мешков, затирка»
+    receipt: Mapped[str] = mapped_column(String(128), default="")  # имя файла чека; "" — нет
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped[Project] = relationship(back_populates="expenses")
 
 
 class Photo(Base):
@@ -588,6 +624,55 @@ class Storage:
             await s.commit()
         return True
 
+    async def add_expense(
+        self, project_id: int, tg_id: int, amount: float, comment: str = "", receipt: str = ""
+    ) -> int | None:
+        """Записать закупку мастера. Возвращает id — по нему кладётся файл чека."""
+        if not await self.owns(project_id, tg_id):
+            return None
+        async with self.session() as s:
+            row = Expense(
+                project_id=project_id, amount=amount, comment=comment[:200], receipt=receipt[:128]
+            )
+            s.add(row)
+            await s.commit()
+            return row.id
+
+    async def set_expense_receipt(self, expense_id: int, tg_id: int, receipt: str) -> bool:
+        """Прикрепить чек к уже записанной закупке (фото приходит вторым шагом)."""
+        async with self.session() as s:
+            row = await s.get(Expense, expense_id)
+            if row is None:
+                return False
+            project = await s.get(Project, row.project_id)
+            if project is None or project.user_id != tg_id:
+                return False
+            row.receipt = receipt[:128]
+            await s.commit()
+        return True
+
+    async def get_expense(self, expense_id: int, tg_id: int) -> Expense | None:
+        async with self.session() as s:
+            row = await s.get(Expense, expense_id)
+            if row is None:
+                return None
+            project = await s.get(Project, row.project_id)
+            if project is None or project.user_id != tg_id:
+                return None
+            return row
+
+    async def delete_expense(self, expense_id: int, tg_id: int) -> bool:
+        async with self.session() as s:
+            row = await s.get(Expense, expense_id)
+            if row is None:
+                return False
+            project = await s.get(Project, row.project_id)
+            if project is None or project.user_id != tg_id:
+                return False
+            await s.delete(row)
+            await s.commit()
+        return True
+
     async def add_photo(
         self, project_id: int, tg_id: int, file_id: str, caption: str = ""
     ) -> bool:
@@ -603,6 +688,9 @@ class Storage:
             project = await s.get(Project, project_id)
             if project is None or project.user_id != tg_id:
                 return False
+            # Строки унесёт каскад, а файлы чеков остались бы на диске навсегда.
+            for name in [e.receipt for e in project.expenses if e.receipt]:
+                receipts.remove(name)
             await s.delete(project)
             await s.commit()
         return True

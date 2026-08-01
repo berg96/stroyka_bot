@@ -11,6 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import CallbackQuery, ErrorEvent, Message, TelegramObject
 
+from tilebot import receipts
 from tilebot.bot.handlers import area, money, photos, price, projects, start, tiling
 from tilebot.config import get_settings
 from tilebot.storage import Storage
@@ -54,6 +55,7 @@ async def on_error(event: ErrorEvent) -> bool:
 
 async def main() -> None:
     settings = get_settings()
+    receipts.DIR = Path(settings.receipts_dir)
 
     db_path = Path(settings.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)

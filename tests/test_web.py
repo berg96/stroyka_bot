@@ -13,9 +13,10 @@ import time
 from urllib.parse import urlencode
 
 import pytest
-from conftest import _room_flow, _tile_qty
+from conftest import _room_flow, _tile_qty, sample_tile_photo
 from httpx import ASGITransport, AsyncClient
 
+from tilebot import receipts
 from tilebot.config import Settings
 from tilebot.web.app import create_app
 
@@ -500,3 +501,130 @@ class TestActParityWithBot:
 
         assert web_act["grand_total_text"] == bot_total.group(1)
         assert object_act["grand_total_text"] == bot_total.group(1)
+
+
+class TestExpensesApi:
+    """Закупки мастера через мини-апп: сумма, приписка, фото чека."""
+
+    async def test_expense_lands_in_the_debt_and_comes_back(self, api):
+        room = await _room_via_api(api)
+        await api.put(f"/api/projects/{room['id']}/deal", json={"amount": 120000})
+
+        r = await api.post(
+            f"/api/projects/{room['id']}/expenses",
+            data={"amount": "12400", "comment": "клей, затирка"},
+        )
+
+        assert r.status_code == 201, r.text
+        brief = r.json()
+        assert brief["spent"] == 12400
+        assert brief["due"] == 132400  # работа + закупка
+        assert brief["expenses"][0]["comment"] == "клей, затирка"
+        assert brief["expenses"][0]["receipt"] is False
+
+    async def test_receipt_is_stored_and_served_back(self, api):
+        room = await _room_via_api(api)
+        photo = sample_tile_photo()  # любая картинка — важно, что вернётся та же
+
+        r = await api.post(
+            f"/api/projects/{room['id']}/expenses",
+            data={"amount": "6000", "comment": "грунтовка"},
+            files={"receipt": ("cheque.jpg", photo, "image/jpeg")},
+        )
+        expense_id = r.json()["expenses"][0]["id"]
+        got = await api.get(f"/api/expenses/{expense_id}/receipt")
+
+        assert r.json()["expenses"][0]["receipt"] is True
+        assert got.status_code == 200
+        assert got.content == photo
+
+    async def test_someone_elses_receipt_is_not_served(self, api):
+        room = await _room_via_api(api)
+        r = await api.post(
+            f"/api/projects/{room['id']}/expenses",
+            data={"amount": "6000"},
+            files={"receipt": ("cheque.jpg", sample_tile_photo(), "image/jpeg")},
+        )
+        expense_id = r.json()["expenses"][0]["id"]
+
+        stranger = init_data(user_id=999)
+        got = await api.get(
+            f"/api/expenses/{expense_id}/receipt", headers={"X-Init-Data": stranger}
+        )
+
+        assert got.status_code == 404
+
+    async def test_pdf_receipt_is_refused(self, api):
+        """Показать pdf в мини-аппе нечем — молча положить его хуже, чем отказать."""
+        room = await _room_via_api(api)
+        r = await api.post(
+            f"/api/projects/{room['id']}/expenses",
+            data={"amount": "6000"},
+            files={"receipt": ("cheque.pdf", b"%PDF-1.4", "application/pdf")},
+        )
+        assert r.status_code == 422
+
+    async def test_act_with_receipts_matches_the_bot(self, api, app):
+        """Чеки в акте — одна строка и один итог во всех трёх путях (бот + 2 веб)."""
+        await _room_flow(app)
+        project_id = (await api.get("/api/projects")).json()[0]["id"]
+        await api.post(f"/api/projects/{project_id}/expenses", data={"amount": "50000"})
+
+        await app.click("Акт выполненных работ")  # цену плитки не спросит — есть чеки
+        bot_act = next(t for t in app.texts if "ИТОГО К ОПЛАТЕ" in t)
+        bot_total = re.search(r"ИТОГО К ОПЛАТЕ: ([\d\s\xa0]+₽)", bot_act)
+        web_act = (await api.get(f"/api/projects/{project_id}/act")).json()
+        object_act = (await api.get(f"/api/objects/{project_id}/act")).json()
+
+        assert "Материалы по чекам" in bot_act
+        assert web_act["receipts_total"] == 50000
+        assert web_act["grand_total"] == pytest.approx(web_act["works_total"] + 50000)
+        assert web_act["grand_total_text"] == bot_total.group(1)
+        assert object_act["grand_total_text"] == bot_total.group(1)
+
+
+class TestExpenseEditing:
+    """Опечатку в сумме надо уметь убрать: она уезжает прямо в долг заказчика."""
+
+    async def test_expense_is_deleted_with_its_receipt(self, api):
+        room = await _room_via_api(api)
+        r = await api.post(
+            f"/api/projects/{room['id']}/expenses",
+            data={"amount": "124000"},  # промах по нулю
+            files={"receipt": ("cheque.jpg", sample_tile_photo(), "image/jpeg")},
+        )
+        expense_id = r.json()["expenses"][0]["id"]
+        name = f"{expense_id}.jpg"
+        assert receipts.path(name) is not None
+
+        brief = (await api.delete(f"/api/expenses/{expense_id}")).json()
+
+        assert brief["spent"] == 0
+        assert brief["expenses"] == []
+        assert receipts.path(name) is None, "файл чека остался на диске"
+
+    async def test_someone_elses_expense_is_not_deleted(self, api):
+        room = await _room_via_api(api)
+        r = await api.post(f"/api/projects/{room['id']}/expenses", data={"amount": "6000"})
+        expense_id = r.json()["expenses"][0]["id"]
+
+        stranger = init_data(user_id=999)
+        got = await api.delete(
+            f"/api/expenses/{expense_id}", headers={"X-Init-Data": stranger}
+        )
+
+        assert got.status_code == 404
+        assert (await api.get(f"/api/projects/{room['id']}")).json()["spent"] == 6000
+
+    async def test_heavy_receipt_is_refused(self, api):
+        room = await _room_via_api(api)
+        heavy = b"x" * (receipts.MAX_BYTES + 1)
+
+        r = await api.post(
+            f"/api/projects/{room['id']}/expenses",
+            data={"amount": "6000"},
+            files={"receipt": ("cheque.jpg", heavy, "image/jpeg")},
+        )
+
+        assert r.status_code == 422
+        assert (await api.get(f"/api/projects/{room['id']}")).json()["spent"] == 0

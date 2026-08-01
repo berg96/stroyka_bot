@@ -10,8 +10,8 @@
 Кто покупает — мастер или заказчик — ситуативно, от объекта к объекту, поэтому
 выдуманная средняя цена мешка молча уезжала в счёт заказчику: в акте она входила
 в «ИТОГО К ОПЛАТЕ», то есть он платил за то, чего мастер не тратил. В деньги идёт
-только факт — цена плитки, которую мастер вбил сам. Всё прочее в акте помечается
-«куплено заказчиком».
+только факт — цена плитки, которую мастер вбил сам, и закупки по чекам из «Денег»
+объекта (`Estimate.receipts_total`). Всё прочее в акте помечается «куплено заказчиком».
 """
 
 import math
@@ -96,6 +96,8 @@ class Estimate:
     works: list[WorkLine] = field(default_factory=list)
     materials: list[MaterialLine] = field(default_factory=list)
     material_costs: dict[str, float] = field(default_factory=dict)  # факт: название → ₽
+    # Закупки мастера по чекам («Деньги» объекта): он купил на свои, заказчик вернёт.
+    receipts_total: float = 0.0
     note: str = ""
 
     @property
@@ -109,7 +111,7 @@ class Estimate:
 
     @property
     def grand_total(self) -> float:
-        return self.works_total + self.materials_total
+        return self.works_total + self.materials_total + self.receipts_total
 
 
 def build_estimate(
@@ -285,6 +287,19 @@ def format_act(est: Estimate) -> str:
 
     if est.materials_total:
         lines.append(f"\nМатериалы: <b>{money(est.materials_total)}</b>")
+
+    if est.receipts_total:
+        # Закупки мастера идут одной строкой: расшифровка и фото чеков живут в
+        # «Деньгах» объекта, а заказчику важна сумма к возврату.
+        lines.append(f"\nМатериалы по чекам: <b>{money(est.receipts_total)}</b>")
+        if est.materials_total:
+            # Гасить одно другим нельзя: мы не знаем, за что чек. Молча выкинуть
+            # цену плитки — потерять из документа реальные деньги мастера, поэтому
+            # показываем оба источника и говорим прямо, что сверить их ему.
+            lines.append(
+                "<i>Плитка посчитана по твоей цене, закупки — по чекам. "
+                "Если плитка в чеках уже есть, убери её из одного места.</i>"
+            )
 
     lines += ["", f"<b>ИТОГО К ОПЛАТЕ: {money(est.grand_total)}</b>"]
     if est.note:

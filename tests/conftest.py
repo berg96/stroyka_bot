@@ -21,7 +21,8 @@ from aiogram.types import Message as TgMessage
 from aiogram.types import User as TgUser
 from PIL import Image, ImageDraw
 
-from tilebot.bot.handlers import area, price, projects, start, tiling
+from tilebot import receipts
+from tilebot.bot.handlers import area, money, photos, price, projects, start, tiling
 from tilebot.storage import Storage
 
 SASHA = 383853880
@@ -116,10 +117,10 @@ class BotHarness:
             self.bot, Update(update_id=self._next_update(), message=message)
         )
 
-    async def send_photo(self) -> None:
-        """Мастер прислал фото плитки."""
+    async def send_photo(self, file_id: str = "tilephoto1") -> None:
+        """Мастер прислал фото — плитки из магазина или чека из строймага."""
         self._message_id += 1
-        photo = PhotoSize(file_id="tilephoto1", file_unique_id="u1", width=600, height=300)
+        photo = PhotoSize(file_id=file_id, file_unique_id="u1", width=600, height=300)
         message = TgMessage(
             message_id=self._message_id,
             date=datetime(2026, 7, 16, 12, 0),
@@ -221,6 +222,12 @@ class BotHarness:
         self.session.sent.clear()
 
 
+@pytest.fixture(autouse=True)
+def receipts_dir(tmp_path, monkeypatch):
+    """Чеки — на диск, поэтому в тестах уводим каталог во временный."""
+    monkeypatch.setattr(receipts, "DIR", tmp_path / "receipts")
+
+
 @pytest.fixture
 async def storage(tmp_path):
     s = Storage(str(tmp_path / "bot.sqlite3"))
@@ -236,7 +243,12 @@ async def app(storage) -> BotHarness:
     dp = Dispatcher()
     # Роутеры живут в модулях, то есть одни и те же на весь прогон, а Dispatcher
     # у каждого теста свой — отвязываем от прошлого, иначе include_router ругнётся.
-    for router in (start.router, tiling.router, area.router, projects.router, price.router):
+    # Порядок — ТОТ ЖЕ, что в main.py: он решает, чей хэндлер поймает сообщение
+    # первым. С другим порядком тест не увидит, как кэтч-олл глушит меню.
+    for router in (
+        start.router, area.router, projects.router, money.router,
+        photos.router, price.router, tiling.router,
+    ):
         router._parent_router = None
         dp.include_router(router)
 
