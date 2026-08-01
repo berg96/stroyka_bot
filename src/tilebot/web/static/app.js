@@ -885,10 +885,11 @@ function screenPaper() {
   const box = h(`<div class="screen"><div class="top">
     <button class="icon-btn" id="back">${icon('back')}</button><h1>${isAct ? 'Акт' : 'Смета'}</h1></div>
     <h2>Работы</h2><div class="card doc" id="works"></div>
-    <div class="doc"><div class="total"><span>РАБОТА</span><span class="num">${esc(e.works_total_text)}</span></div></div>
+    <div class="doc"><div class="total${isAct ? '' : ' grand'}"><span>РАБОТА</span><span class="num">${esc(e.works_total_text)}</span></div></div>
     <h2>${isAct ? 'Материалы' : 'Материалы — купить'}</h2><div class="card doc" id="mats"></div>
-    <div class="doc"><div class="total grand"><span>${isAct ? 'ИТОГО К ОПЛАТЕ' : 'ВСЁ ВМЕСТЕ ≈'}</span><span class="num">${esc(isAct ? e.grand_total_text : e.rough_total_text)}</span></div></div>
-    ${isAct ? '' : `<p class="hint" style="margin-top:12px">Материалы заказчик покупает сам, в стоимость работы не входят. Цены примерные, для ориентира.</p>`}
+    ${isAct
+      ? `<div class="doc"><div class="total grand"><span>ИТОГО К ОПЛАТЕ</span><span class="num">${esc(e.grand_total_text)}</span></div></div>`
+      : `<p class="hint" style="margin-top:12px">Материалы заказчик покупает сам — в стоимость работы они не входят.</p>`}
     ${e.note ? `<p class="hint">${esc(e.note)}</p>` : ''}</div>`);
   const works = box.querySelector('#works');
   e.works.forEach((w) => works.append(h(`<div class="line"><div class="grow"><div>${esc(w.name)}</div><div class="qty">${w.qty}${w.unit ? ' ' + esc(w.unit) + ' × ' + money(w.price) : ''}</div></div><div class="q num">${esc(w.total_text)}</div></div>`)));

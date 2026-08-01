@@ -272,15 +272,16 @@ class TestGrout:
 class TestEstimateAndAct:
     """Смета — до работ и по прайсу. Акт — после, по факту."""
 
-    async def test_estimate_shows_rough_material_cost(self, app):
-        """Артём: примерная стоимость материалов — чтобы прикинуть, во сколько выйдёт всё."""
+    async def test_estimate_hides_material_cost(self, app):
+        """Артём: в смете стоимость материалов не показывать — заказчик покупает сам."""
         await _room_flow(app)
         app.forget()
         await app.click("Смета заказчику")
 
         assert app.said("РАБОТА:")
-        assert app.said("ВСЁ ВМЕСТЕ ≈")
-        assert app.said("можно взять дешевле или дороже")
+        assert app.said("Материалы — купить")  # список покупок остаётся
+        assert not app.said("ВСЁ ВМЕСТЕ")  # итог сметы — только работа
+        assert not app.said("≈ ")  # у строк закупки нет прикидки в рублях
 
     async def test_estimate_does_not_sell_materials(self, app):
         """Материалы — не заработок мастера: в стоимость работы они не входят."""

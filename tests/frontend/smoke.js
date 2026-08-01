@@ -85,15 +85,21 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
     if (/\/api\/me$/.test(url)) return {ok: true, status: 200, json: async () => ({id: 1, name: '', phone: '', price: {wall_tiling: 1200, floor_tiling: 1000, cutting: 60, grouting: 200, grouting_epoxy: 450, waterproofing: 400, priming: 100, demolition: 500, min_order: 0, plastering: 350, laminate_laying: 600, baseboard_mount: 200, reveals: 800}})};
     if (/\/api\/price$/.test(url)) return {ok: true, status: 200, json: async () => body};
     if (/\/api\/objects\/1$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => OBJECT()};
-    if (/\/api\/objects\/1\/(estimate|act)$/.test(url)) return {ok: true, status: 200, json: async () => ({
-      title: 'Ванная, Борзова',
-      works: [{name: 'Укладка плитки', qty: 20.5, unit: 'м²', price: 1200, total: 24600, total_text: '24 600 ₽'},
-              {name: 'Укладка ламината', qty: 2.9, unit: 'м²', price: 600, total: 1764, total_text: '1 764 ₽'}],
-      works_total: 26364, works_total_text: '26 364 ₽',
-      materials: [{name: 'Плитка 600×300', qty_text: '131', unit: 'шт', packs: 17, cost: 35400},
-                  {name: 'Ламинат', qty_text: '2', unit: 'пачек', cost: 1800}],
-      materials_total: 0, rough_materials_total: 37200, rough_total: 63564, rough_total_text: '63 564 ₽',
-      grand_total: 63564, grand_total_text: '63 564 ₽', note: ''})};
+    // Смета — без денег за материалы (бэкенд их не отдаёт), акт — с деньгами.
+    if (/\/api\/objects\/1\/(estimate|act)$/.test(url)) {
+      const isAct = /\/act$/.test(url);
+      return {ok: true, status: 200, json: async () => ({
+        title: 'Ванная, Борзова',
+        works: [{name: 'Укладка плитки', qty: 20.5, unit: 'м²', price: 1200, total: 24600, total_text: '24 600 ₽'},
+                {name: 'Укладка ламината', qty: 2.9, unit: 'м²', price: 600, total: 1764, total_text: '1 764 ₽'}],
+        works_total: 26364, works_total_text: '26 364 ₽',
+        materials: [{name: 'Плитка 600×300', qty_text: '131', unit: 'шт', packs: 17, cost: isAct ? 35400 : null},
+                    {name: 'Ламинат', qty_text: '2', unit: 'пачек', cost: isAct ? 1800 : null}],
+        materials_total: isAct ? 37200 : 0,
+        rough_materials_total: isAct ? 37200 : 0,
+        rough_total: isAct ? 63564 : 26364, rough_total_text: isAct ? '63 564 ₽' : '26 364 ₽',
+        grand_total: isAct ? 63564 : 26364, grand_total_text: isAct ? '63 564 ₽' : '26 364 ₽', note: ''})};
+    }
     if (/\/api\/objects\/1\/works$/.test(url) && m === 'POST')
       return {ok: true, status: 201, json: async () => (body.kind === 'plumbing' ? plumbingWork() : laminateWork())};
     if (/\/api\/objects\/1\/works\/10$/.test(url) && m === 'GET') return {ok: true, status: 200, json: async () => laminateWork()};
@@ -296,8 +302,12 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   byText(ce.w, '.tile-row', 'Ванная').click(); await wait(80);
   byText(ce.w, '.btn', 'Смета').click(); await wait(80);
   check('смета: обе работы (плитка+ламинат)', ce.w.document.body.textContent.includes('Укладка плитки') && ce.w.document.body.textContent.includes('Укладка ламината'));
-  check('смета: общий итог', ce.w.document.body.textContent.includes('63 564'));
+  check('смета: итог — только работа', ce.w.document.body.textContent.includes('26 364'));
   check('смета: материалы обоих видов', ce.w.document.body.textContent.includes('Плитка 600×300') && ce.w.document.body.textContent.includes('Ламинат'));
+  // Стоимость материалов в смете не показываем: заказчик покупает сам, цифра читается
+  // как обещание мастера. Итог «ВСЁ ВМЕСТЕ» вместе с ней ушёл.
+  check('смета: без денег за материалы', !ce.w.document.body.textContent.includes('ВСЁ ВМЕСТЕ')
+    && !ce.w.document.body.textContent.includes('63 564'), 'смета не должна показывать цены материалов');
 
   console.log('\nСоздание без плитки — «замерь комнату» (Саню звали не на плитку)');
   const cm = makeApp();

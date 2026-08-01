@@ -387,7 +387,9 @@ class TestObjectEstimate:
         assert any("ламинат" in w["name"].lower() for w in est["works"])  # работа ламината
         assert est["works_total"] > 0  # плитка + ламинат
         assert any("Ламинат" in m["name"] for m in est["materials"])  # материалы обоих
-        assert est["rough_total"] >= est["works_total"]
+        # Стоимости материалов в смете нет — ни по строкам, ни в итоге.
+        assert all(m["cost"] is None for m in est["materials"])
+        assert est["rough_total"] == pytest.approx(est["works_total"])
 
     async def test_act_totals_work_plus_materials(self, api):
         room = await _room_via_api(api)

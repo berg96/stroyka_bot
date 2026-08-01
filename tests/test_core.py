@@ -5,7 +5,13 @@ import pytest
 from PIL import Image
 
 from tilebot.core.angled import angled_pieces, polygon_area
-from tilebot.core.estimate import PriceList, rough_material_cost, tile_paid_area_m2
+from tilebot.core.estimate import (
+    PriceList,
+    build_estimate,
+    format_estimate,
+    rough_material_cost,
+    tile_paid_area_m2,
+)
 from tilebot.core.geometry import (
     GeometryError,
     Part,
@@ -441,6 +447,41 @@ class TestTilePacks:
         assert line.per_pack == 9
         assert line.qty % 9 != 0, "нужен случай, где пачка не делится нацело"
         assert tile_paid_area_m2(line) > (line.area_m2 or 0)
+
+
+class TestEstimateMoney:
+    """Смета — без денег за материалы, акт — с деньгами (решение Артёма 01.08).
+
+    Заказчик покупает материалы сам, в своём магазине: цифра рядом со строкой
+    закупки читается как обещание мастера, поэтому в смете её нет вовсе.
+    """
+
+    def _est(self, *, include_materials_cost):
+        lay = build_layout(
+            Surface("стена", 2000, 2700), Tile(600, 300, per_pack=8, price_per_m2=1450)
+        )
+        return build_estimate(
+            "Ванная", [lay], [calc_materials(lay)], PriceList(),
+            include_materials_cost=include_materials_cost,
+        )
+
+    def test_estimate_has_no_material_money(self):
+        est = self._est(include_materials_cost=False)
+
+        assert est.materials, "список покупок в смете остаётся"
+        assert est.material_costs == {} and est.rough_costs == {}
+        assert est.rough_total == est.works_total  # итог сметы — только работа
+        text = format_estimate(est)
+        assert "ВСЁ ВМЕСТЕ" not in text
+        assert "Материалы — купить" in text
+        # Деньги в смете есть только в блоке работ — после списка закупки их нет.
+        assert "₽" not in text.split("Материалы — купить")[1]
+
+    def test_act_keeps_material_money(self):
+        est = self._est(include_materials_cost=True)
+
+        assert est.material_costs, "плитку мастер купил на свои — это факт для акта"
+        assert est.grand_total > est.works_total
 
 
 class TestAngled:

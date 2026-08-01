@@ -4,9 +4,10 @@
 называет цифрой без расшифровки. Смета показывает, за что берутся деньги.
 
 Деньги за материалы сюда не идут: мастер продаёт работу, а плитку заказчик покупает
-сам — по списку покупок, который считается отдельно. Посчитать материалы в рублях
-можно, если мастер закупается сам, но это его отдельная история, а не строка в
-счёте заказчику.
+сам — по списку покупок, который считается отдельно. В смете нет даже прикидки по
+справочным ценам: заказчик читает любую цифру рядом со строкой закупки как обещание
+мастера, а магазины и партии у всех разные. Материалы в рублях появляются только в
+акте — там это факт, деньги, которые мастер отдал в кассе на свои.
 """
 
 import math
@@ -248,10 +249,10 @@ def build_estimate(
 
     est.materials = merge_materials(materials)
 
-    # Деньги за материалы бывают двух сортов и путать их нельзя. Точные — это то,
-    # что мастер реально отдал в кассе (знаем, если он вбил цену плитки): идут в
-    # акт. Прикидка по справочным ценам — ориентир для сметы, чтобы заказчик
-    # понимал масштаб; взять он может дешевле или дороже.
+    # Деньги за материалы идут только в акт (`include_materials_cost`). Точные —
+    # то, что мастер реально отдал в кассе (знаем, если он вбил цену плитки);
+    # остальное добираем справочными ценами прайса. В смете материалов в рублях
+    # нет вовсе: там список покупок, а не счёт.
     if include_materials_cost:
         for line in est.materials:
             if line.kind != "tile":
@@ -264,11 +265,11 @@ def build_estimate(
                 cost = tile_paid_area_m2(line) * tile_price
                 est.material_costs[line.name] = round(cost, 2)
 
-    known_tile_price = any(lay.tile.price_per_m2 for lay in layouts)
-    for line in est.materials:
-        if line.kind == "tile" and known_tile_price and include_materials_cost:
-            continue  # цену плитки мастер знает точно — прикидка не нужна
-        est.rough_costs[line.name] = round(rough_material_cost(line, price), 2)
+        known_tile_price = any(lay.tile.price_per_m2 for lay in layouts)
+        for line in est.materials:
+            if line.kind == "tile" and known_tile_price:
+                continue  # цену плитки мастер знает точно — прикидка не нужна
+            est.rough_costs[line.name] = round(rough_material_cost(line, price), 2)
 
     if price.min_order and est.works_total < price.min_order:
         est.works.append(
@@ -304,33 +305,21 @@ def _work_lines(est: Estimate) -> list[str]:
 
 
 def format_estimate(est: Estimate) -> str:
-    """Смета — документ ДО работ: сколько будет стоить и что купить.
+    """Смета — документ ДО работ: сколько стоит работа и что купить.
 
-    Итог — это работа мастера. Материалы идут ниже списком: заказчик покупает их
-    сам, и складывать их с работой в одну цифру нечестно — выглядело бы так, будто
-    мастер берёт эти деньги себе.
+    Итог — это работа мастера, и он единственный. Материалы идут ниже списком, без
+    денег: заказчик покупает их сам, по своим магазинам и ценам, а любая цифра
+    рядом читается как обещание мастера.
     """
     lines = [f"<b>Смета — {est.title}</b>", "", "<b>Работы</b>"]
     lines += _work_lines(est)
     lines += ["", f"<b>РАБОТА: {money(est.works_total)}</b>"]
 
-    lines += ["", "<b>Материалы — купить</b>"]
-    for m in est.materials:
-        rough = est.rough_costs.get(m.name) or est.material_costs.get(m.name)
-        tail = f" ≈ {money(rough)}" if rough else ""
-        lines.append(f"• {m.name}: {_qty_with_packs(m)}{tail}")
-
-    if est.rough_materials_total:
-        lines += [
-            "",
-            f"Материалы ≈ <b>{money(est.rough_materials_total)}</b>",
-            f"<b>ВСЁ ВМЕСТЕ ≈ {money(est.rough_total)}</b>",
-            "",
-            "<i>Материалы заказчик покупает сам, в стоимость работы они не входят. "
-            "Цены примерные, для ориентира — можно взять дешевле или дороже.</i>",
-        ]
-    else:
-        lines.append("\n<i>Материалы в стоимость работы не входят — покупаются отдельно.</i>")
+    if est.materials:
+        lines += ["", "<b>Материалы — купить</b>"]
+        for m in est.materials:
+            lines.append(f"• {m.name}: {_qty_with_packs(m)}")
+        lines.append("\n<i>Материалы заказчик покупает сам, в стоимость работы они не входят.</i>")
 
     if est.note:
         lines += ["", f"<i>{est.note}</i>"]

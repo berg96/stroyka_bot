@@ -501,7 +501,8 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
             for ln in r.work_lines:
                 add_work(ln.name, ln.qty, ln.unit, ln.price)
             for m in r.materials:
-                add_material(m, rough_material_cost(m, price))
+                # В смете материалы без денег — только список покупок (см. estimate.py).
+                add_material(m, rough_material_cost(m, price) if materials_cost else None)
 
         works_out: list[dict] = []
         for w in work_acc.values():

@@ -113,24 +113,26 @@ def render_estimate_pdf(
         story.append(table(rows, [90 * mm, 25 * mm, 25 * mm, 28 * mm], total_row=True))
 
     if est.materials:
-        story.append(Paragraph("Материалы", h2))
-        rows = [["Наименование", "Кол-во", "Стоимость"]]
+        # Денег здесь нет: заказчик покупает материалы сам, по своим ценам, а
+        # цифра в смете читалась бы как обещание мастера.
+        story.append(Paragraph("Материалы — купить", h2))
+        rows = [["Наименование", "Кол-во"]]
         for m in est.materials:
-            cost = est.material_costs.get(m.name)
             rows.append([
                 f"{m.name}" + (f" ({m.note})" if m.note else ""),
                 f"{m.format_qty()} {m.unit}",
-                money(cost) if cost else "—",
             ])
-        if est.materials_total:
-            rows.append(["Итого материалы", "", money(est.materials_total)])
+        story.append(table(rows, [140 * mm, 28 * mm]))
+        story.append(Spacer(1, 4))
         story.append(
-            table(rows, [110 * mm, 28 * mm, 30 * mm], total_row=bool(est.materials_total))
+            Paragraph(
+                "Материалы заказчик покупает сам — в стоимость работы они не входят.", small
+            )
         )
 
     story.append(Spacer(1, 10))
     total = Table(
-        [["ВСЕГО", money(est.grand_total)]], colWidths=[138 * mm, 30 * mm], hAlign="LEFT"
+        [["ИТОГО РАБОТА", money(est.works_total)]], colWidths=[138 * mm, 30 * mm], hAlign="LEFT"
     )
     total.setStyle(
         TableStyle([
