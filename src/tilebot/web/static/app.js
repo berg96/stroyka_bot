@@ -894,7 +894,9 @@ function screenPaper() {
   const works = box.querySelector('#works');
   e.works.forEach((w) => works.append(h(`<div class="line"><div class="grow"><div>${esc(w.name)}</div><div class="qty">${w.qty}${w.unit ? ' ' + esc(w.unit) + ' × ' + money(w.price) : ''}</div></div><div class="q num">${esc(w.total_text)}</div></div>`)));
   const mats = box.querySelector('#mats');
-  e.materials.forEach((m) => mats.append(h(`<div class="line"><div class="grow"><div>${esc(m.name)}</div><div class="qty">${esc(m.qty_text)} ${esc(m.unit)}${m.packs ? ` (${m.packs} уп.)` : ''}</div></div><div class="q num muted">${m.cost ? '≈ ' + money(m.cost) : ''}</div></div>`)));
+  // В акте деньги только по факту (плитка, если мастер вбил цену) — как в боте;
+  // остальное купил заказчик. В смете денег за материалы нет вовсе.
+  e.materials.forEach((m) => mats.append(h(`<div class="line"><div class="grow"><div>${esc(m.name)}</div><div class="qty">${esc(m.qty_text)} ${esc(m.unit)}${m.packs ? ` (${m.packs} уп.)` : ''}</div></div><div class="q num ${m.cost ? '' : 'muted'}">${m.cost ? money(m.cost) : (isAct ? 'заказчик' : '')}</div></div>`)));
   box.querySelector('#back').onclick = () => (e.fromObject ? go('object') : go('canvas'));
   return box;
 }

@@ -28,7 +28,6 @@ from tilebot.core.estimate import (
     PriceList,
     build_estimate,
     money,
-    rough_material_cost,
 )
 from tilebot.core.materials import MaterialLine
 from tilebot.core.models import (
@@ -490,9 +489,9 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
             for w in est.works:
                 add_work(w.name, w.qty, w.unit, w.price)
             for m in est.materials:
-                cost = est.material_costs.get(m.name) if materials_cost else None
-                if cost is None:
-                    cost = est.rough_costs.get(m.name)
+                # Деньги — только факт из ядра (цена плитки в акте); ту же цифру
+                # печатает бот в `format_act`, поэтому документы не разойдутся.
+                cost = est.material_costs.get(m.name)
                 packs = math.ceil(m.qty / m.per_pack) if m.kind == "tile" and m.per_pack else None
                 add_material(m, cost, packs=packs)
         # Остальные работы.
@@ -501,8 +500,9 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
             for ln in r.work_lines:
                 add_work(ln.name, ln.qty, ln.unit, ln.price)
             for m in r.materials:
-                # В смете материалы без денег — только список покупок (см. estimate.py).
-                add_material(m, rough_material_cost(m, price) if materials_cost else None)
+                # Штукатурка, ламинат и прочее — только список покупок: цены на них
+                # мастер нигде не задаёт, а выдумывать её нельзя (см. estimate.py).
+                add_material(m, None)
 
         works_out: list[dict] = []
         for w in work_acc.values():
@@ -527,9 +527,7 @@ def create_app(storage: Storage | None = None, settings: Settings | None = None)
             "works": works_out,
             "works_total": works_total, "works_total_text": money(works_total),
             "materials": materials_out,
-            "materials_total": mats_total if materials_cost else 0,
-            "rough_materials_total": mats_total,
-            "rough_total": grand, "rough_total_text": money(grand),
+            "materials_total": mats_total,
             "grand_total": grand, "grand_total_text": money(grand),
             "note": "", "price": asdict(price),
         }
@@ -818,7 +816,7 @@ def _estimate_json(est: Estimate, *, price: PriceList) -> dict:
     materials = []
     for m in est.materials:
         line = _line_json(m)
-        line["cost"] = est.rough_costs.get(m.name) or est.material_costs.get(m.name)
+        line["cost"] = est.material_costs.get(m.name)
         # Плитку продают пачками, хотя цену пишут за м²: нужна 21.5 пачки — берёшь
         # 22 и платишь за все.
         line["packs"] = (
@@ -843,9 +841,6 @@ def _estimate_json(est: Estimate, *, price: PriceList) -> dict:
         "works_total_text": money(est.works_total),
         "materials": materials,
         "materials_total": est.materials_total,
-        "rough_materials_total": est.rough_materials_total,
-        "rough_total": est.rough_total,
-        "rough_total_text": money(est.rough_total),
         "grand_total": est.grand_total,
         "grand_total_text": money(est.grand_total),
         "note": est.note,

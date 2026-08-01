@@ -4,10 +4,14 @@
 называет цифрой без расшифровки. Смета показывает, за что берутся деньги.
 
 Деньги за материалы сюда не идут: мастер продаёт работу, а плитку заказчик покупает
-сам — по списку покупок, который считается отдельно. В смете нет даже прикидки по
-справочным ценам: заказчик читает любую цифру рядом со строкой закупки как обещание
-мастера, а магазины и партии у всех разные. Материалы в рублях появляются только в
-акте — там это факт, деньги, которые мастер отдал в кассе на свои.
+сам — по списку покупок, который считается отдельно.
+
+Справочных цен на материалы у нас нет вовсе (выпилены 01.08 по решению Артёма).
+Кто покупает — мастер или заказчик — ситуативно, от объекта к объекту, поэтому
+выдуманная средняя цена мешка молча уезжала в счёт заказчику: в акте она входила
+в «ИТОГО К ОПЛАТЕ», то есть он платил за то, чего мастер не тратил. В деньги идёт
+только факт — цена плитки, которую мастер вбил сам. Всё прочее в акте помечается
+«куплено заказчиком».
 """
 
 import math
@@ -55,45 +59,8 @@ class PriceList:
     baseboard_mount: float = 200.0  # монтаж плинтуса, ₽/пог.м
     reveals: float = 800.0  # откосы, ₽/м²
 
-    # Справочные цены материалов — чтобы в смете была прикидка «во сколько выйдет
-    # всё». Это ориентир, а не счёт: заказчик покупает сам и может взять дешевле
-    # или дороже. Цифры — средние по рынку на июль 2026, правятся в прайсе.
-    mat_tile_m2: float = 1500.0  # плитка, ₽/м² — разброс самый большой
-    mat_glue_kg: float = 18.0  # мешок 25 кг ≈ 450 ₽
-    mat_grout_kg: float = 175.0  # цементная, пачка 2 кг ≈ 350 ₽
-    mat_grout_epoxy_kg: float = 1200.0  # эпоксидная, от 1899 ₽ за упаковку
-    mat_primer_l: float = 80.0  # канистра 10 л ≈ 800 ₽
-    mat_waterproof_kg: float = 150.0  # ведро 20 кг ≈ 3000 ₽
-    mat_clip_pcs: float = 4.0  # СВП-зажимы, 100 шт ≈ 400 ₽
-    mat_cross_pcs: float = 1.0  # крестики, 100 шт ≈ 100 ₽
-    mat_tape_m: float = 150.0  # гидроизоляционная лента, ₽/м
-    # Материалы других видов работ.
-    mat_plaster_kg: float = 20.0  # смесь штукатурки/шпаклёвки, мешок 25 кг ≈ 500 ₽
-    mat_laminate_m2: float = 900.0  # ламинат, ₽/м²
-    mat_underlay_m2: float = 90.0  # подложка, ₽/м²
-    mat_baseboard_pcs: float = 350.0  # планка плинтуса (≈2.5 м), ₽/шт
-    mat_baseboard_corner_pcs: float = 40.0  # уголок/заглушка/соединитель, ₽/шт
-
-
-# Какая цена прайса отвечает за какой материал. Плитка считается по площади с
-# запасом, остальное — по количеству в списке покупок.
-MATERIAL_PRICE_FIELDS: dict[str, str] = {
-    "tile": "mat_tile_m2",
-    "glue": "mat_glue_kg",
-    "grout": "mat_grout_kg",
-    "grout_epoxy": "mat_grout_epoxy_kg",
-    "primer": "mat_primer_l",
-    "waterproof": "mat_waterproof_kg",
-    "clips": "mat_clip_pcs",
-    "crosses": "mat_cross_pcs",
-    "tape": "mat_tape_m",
-    # Материалы других видов работ.
-    "plaster": "mat_plaster_kg",
-    "laminate": "mat_laminate_m2",
-    "underlay": "mat_underlay_m2",
-    "baseboard": "mat_baseboard_pcs",
-    "baseboard_corner": "mat_baseboard_corner_pcs",
-}
+    # Справочных цен материалов в прайсе нет: см. модуль-докстринг. Старые ключи
+    # `mat_*` из БД отбрасывает `from_dict` в storage.
 
 
 def tile_paid_area_m2(line: MaterialLine) -> float:
@@ -107,17 +74,6 @@ def tile_paid_area_m2(line: MaterialLine) -> float:
     tile_area = (line.area_m2 or 0.0) / line.qty  # площадь одной плитки
     packs = math.ceil(line.qty / line.per_pack)
     return packs * line.per_pack * tile_area
-
-
-def rough_material_cost(line: MaterialLine, price: PriceList) -> float:
-    """Прикидка стоимости строки закупки по справочным ценам."""
-    field = MATERIAL_PRICE_FIELDS.get(line.kind)
-    if not field:
-        return 0.0
-    rate = getattr(price, field, 0.0)
-    if line.kind == "tile":
-        return tile_paid_area_m2(line) * rate
-    return line.qty * rate
 
 
 @dataclass(frozen=True)
@@ -140,7 +96,6 @@ class Estimate:
     works: list[WorkLine] = field(default_factory=list)
     materials: list[MaterialLine] = field(default_factory=list)
     material_costs: dict[str, float] = field(default_factory=dict)  # факт: название → ₽
-    rough_costs: dict[str, float] = field(default_factory=dict)  # прикидка по справочным
     note: str = ""
 
     @property
@@ -153,18 +108,8 @@ class Estimate:
         return sum(self.material_costs.values())
 
     @property
-    def rough_materials_total(self) -> float:
-        """Прикидка материалов: факт там, где он известен, справочная цена — где нет."""
-        return sum(self.material_costs.values()) + sum(self.rough_costs.values())
-
-    @property
     def grand_total(self) -> float:
         return self.works_total + self.materials_total
-
-    @property
-    def rough_total(self) -> float:
-        """Во сколько примерно обойдётся всё — работа плюс материалы."""
-        return self.works_total + self.rough_materials_total
 
 
 def build_estimate(
@@ -249,27 +194,20 @@ def build_estimate(
 
     est.materials = merge_materials(materials)
 
-    # Деньги за материалы идут только в акт (`include_materials_cost`). Точные —
-    # то, что мастер реально отдал в кассе (знаем, если он вбил цену плитки);
-    # остальное добираем справочными ценами прайса. В смете материалов в рублях
-    # нет вовсе: там список покупок, а не счёт.
+    # Деньги за материалы идут только в акт (`include_materials_cost`) и только по
+    # факту: цена плитки, которую мастер вбил сам. Клей, затирку и прочее он то
+    # покупает сам, то не покупает — гадать за него ценой мешка мы не будем, в
+    # акте такая строка помечается «куплено заказчиком».
     if include_materials_cost:
-        for line in est.materials:
-            if line.kind != "tile":
-                continue
-            tile_price = next(
-                (lay.tile.price_per_m2 for lay in layouts if lay.tile.price_per_m2), None
-            )
-            if tile_price:
+        tile_price = next(
+            (lay.tile.price_per_m2 for lay in layouts if lay.tile.price_per_m2), None
+        )
+        if tile_price:
+            for line in est.materials:
+                if line.kind != "tile":
+                    continue
                 # Платим за упаковки целиком — как в магазине.
-                cost = tile_paid_area_m2(line) * tile_price
-                est.material_costs[line.name] = round(cost, 2)
-
-        known_tile_price = any(lay.tile.price_per_m2 for lay in layouts)
-        for line in est.materials:
-            if line.kind == "tile" and known_tile_price:
-                continue  # цену плитки мастер знает точно — прикидка не нужна
-            est.rough_costs[line.name] = round(rough_material_cost(line, price), 2)
+                est.material_costs[line.name] = round(tile_paid_area_m2(line) * tile_price, 2)
 
     if price.min_order and est.works_total < price.min_order:
         est.works.append(

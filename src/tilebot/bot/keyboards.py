@@ -344,16 +344,6 @@ def price_fields() -> InlineKeyboardMarkup:
         ("cutting", "Подрезка, ₽/шт"),
         ("demolition", "Демонтаж, ₽/м²"),
         ("min_order", "Минимальный заказ, ₽"),
-        # Справочные цены материалов — правятся так же, как расценки на работу.
-        ("mat_tile_m2", "🧱 Плитка, ₽/м²"),
-        ("mat_glue_kg", "🧱 Клей, ₽/кг"),
-        ("mat_grout_kg", "🧱 Затирка цем., ₽/кг"),
-        ("mat_grout_epoxy_kg", "🧱 Затирка эпокс., ₽/кг"),
-        ("mat_primer_l", "🧱 Грунтовка, ₽/л"),
-        ("mat_waterproof_kg", "🧱 Гидроизоляция, ₽/кг"),
-        ("mat_clip_pcs", "🧱 СВП-зажим, ₽/шт"),
-        ("mat_cross_pcs", "🧱 Крестик, ₽/шт"),
-        ("mat_tape_m", "🧱 Гидролента, ₽/м"),
     ):
         b.button(text=label, callback_data=f"price:{field}")
     b.adjust(1)

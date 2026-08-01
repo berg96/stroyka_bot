@@ -8,7 +8,7 @@ callback_data, ввод, который бот молча понял не так
 мини-аппа — он обязан считать ту же комнату теми же числами.
 """
 
-from conftest import _room_flow, _tile_qty, _tile_qty_anywhere
+from conftest import SASHA, _room_flow, _tile_qty, _tile_qty_anywhere
 
 
 class TestJoint:
@@ -65,6 +65,20 @@ class TestPrice:
         await _room_flow(app)
         assert not app.said("Цена плитки")
         assert not app.said("Плитка на ")
+
+    async def test_button_from_an_old_message_does_not_break(self, app, storage):
+        """Кнопки живут в истории чата: у Сани остались старые «Твой прайс».
+
+        Справочные цены материалов выпилены 01.08 — нажатие такой кнопки роняло
+        хэндлер (KeyError) и записывало мусорный ключ в прайс.
+        """
+        await app.click_data("price:mat_glue_kg")
+        assert app.said("такой строки в прайсе больше нет")
+
+        await app.send("777")  # если FSM остался в вводе цены — число уйдёт в прайс
+        user = await storage.get_or_create_user(SASHA)
+        assert not hasattr(user.price, "mat_glue_kg")
+        assert 777 not in vars(user.price).values()
 
 
 class TestRoom:

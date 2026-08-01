@@ -25,22 +25,9 @@ WORK_LABELS = {
     "min_order": "Минимальный заказ, ₽",
 }
 
-# Справочные цены материалов — по ним считаются деньги за материалы в АКТЕ, если
-# мастер закупался сам, а чеки по каждому мешку вбивать не хочет. В смете их нет:
-# там список покупок без денег, заказчик покупает сам.
-MATERIAL_LABELS = {
-    "mat_tile_m2": "Плитка, ₽/м²",
-    "mat_glue_kg": "Клей, ₽/кг",
-    "mat_grout_kg": "Затирка цементная, ₽/кг",
-    "mat_grout_epoxy_kg": "Затирка эпоксидная, ₽/кг",
-    "mat_primer_l": "Грунтовка, ₽/л",
-    "mat_waterproof_kg": "Гидроизоляция, ₽/кг",
-    "mat_clip_pcs": "СВП-зажим, ₽/шт",
-    "mat_cross_pcs": "Крестик, ₽/шт",
-    "mat_tape_m": "Гидролента, ₽/м",
-}
-
-LABELS = {**WORK_LABELS, **MATERIAL_LABELS}
+# Цен на материалы в прайсе нет: кто их покупает — мастер или заказчик — ситуативно,
+# и средняя цена мешка молча уезжала заказчику в счёт (см. core/estimate.py).
+LABELS = WORK_LABELS
 
 
 class Price(StatesGroup):
@@ -58,11 +45,8 @@ async def show_price(message: Message, storage: Storage) -> None:
     for field, label in WORK_LABELS.items():
         lines.append(f"• {label}: <b>{money(getattr(price, field))}</b>")
 
-    lines += ["", "<b>Материалы — для акта, если закупался сам</b>"]
-    for field, label in MATERIAL_LABELS.items():
-        lines.append(f"• {label}: <b>{money(getattr(price, field))}</b>")
-    lines.append("<i>По ним в акте считается, сколько заказчик вернёт за материалы. "
-                 "В смете материалы идут без денег — их покупает заказчик.</i>")
+    lines.append("\n<i>Материалы в смету и акт идут списком, без денег: "
+                 "цену плитки спрошу в акте, если закупался сам.</i>")
 
     signature = " · ".join(x for x in (user.name, user.phone) if x)
     lines += ["", f"Подпись в смете: {signature or '<i>не задана</i>'} — /подпись"]
@@ -74,6 +58,18 @@ async def show_price(message: Message, storage: Storage) -> None:
 @router.callback_query(F.data.startswith("price:"))
 async def ask_value(call: CallbackQuery, state: FSMContext) -> None:
     field = call.data.split(":", 1)[1]
+    # Кнопки живут в истории чата, а не в коде: у Сани в переписке остались старые
+    # сообщения «Твой прайс» с полями, которых больше нет (справочные цены материалов
+    # выпилены 01.08). Без этой проверки — KeyError и мусорный ключ в прайсе.
+    if field not in LABELS:
+        await call.answer("Этой строки в прайсе больше нет")
+        await state.clear()
+        await call.message.answer(
+            "Это старое сообщение — такой строки в прайсе больше нет.\n"
+            "Материалы теперь идут без денег, открой <b>💰 Прайс</b> заново.",
+            reply_markup=kb.MAIN_MENU,
+        )
+        return
     await state.update_data(field=field)
     await state.set_state(Price.value)
     await call.answer()
@@ -90,6 +86,11 @@ async def set_value(message: Message, state: FSMContext, storage: Storage) -> No
 
     data = await state.get_data()
     field = data["field"]
+    if field not in LABELS:  # тот же случай: жал старую кнопку до перезапуска бота
+        await state.clear()
+        await message.answer("Этой строки в прайсе больше нет.", reply_markup=kb.MAIN_MENU)
+        await show_price(message, storage)
+        return
 
     user = await storage.get_or_create_user(message.from_user.id)
     price = user.price

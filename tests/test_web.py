@@ -389,13 +389,32 @@ class TestObjectEstimate:
         assert any("Ламинат" in m["name"] for m in est["materials"])  # материалы обоих
         # Стоимости материалов в смете нет — ни по строкам, ни в итоге.
         assert all(m["cost"] is None for m in est["materials"])
-        assert est["rough_total"] == pytest.approx(est["works_total"])
+        assert est["grand_total"] == pytest.approx(est["works_total"])
 
     async def test_act_totals_work_plus_materials(self, api):
         room = await _room_via_api(api)
+        await api.patch(f"/api/projects/{room['id']}", json={"tile_price": 1450})
         await api.post(f"/api/objects/{room['id']}/works", json={"kind": "plaster"})
         act = (await api.get(f"/api/objects/{room['id']}/act")).json()
+        assert act["materials_total"] > 0, "иначе равенство ниже выполняется само собой"
         assert act["grand_total"] == pytest.approx(act["works_total"] + act["materials_total"])
+
+    async def test_act_prices_only_what_the_master_paid(self, api):
+        """Всё, кроме плитки, в счёт по выдуманной цене не ставим — цен на них нет.
+
+        Клей, затирку, штукатурную смесь мастер то покупает, то нет; цена бралась
+        из справочника прайса и молча уезжала заказчику в «ИТОГО К ОПЛАТЕ».
+        """
+        room = await _room_via_api(api)
+        await api.patch(f"/api/projects/{room['id']}", json={"tile_price": 1450})
+        await api.post(f"/api/objects/{room['id']}/works", json={"kind": "plaster"})
+        act = (await api.get(f"/api/objects/{room['id']}/act")).json()
+
+        tiles = [m for m in act["materials"] if "Плитка" in m["name"]]
+        assert tiles and all(m["cost"] for m in tiles), "цену плитки мастер вбил — она в акте"
+        others = [m for m in act["materials"] if "Плитка" not in m["name"]]
+        assert len(others) >= 2, "нужны материалы и плитки, и штукатурки"
+        assert all(m["cost"] is None for m in others), [m["name"] for m in others]
 
 
 class TestTileDecoupled:
@@ -456,3 +475,28 @@ class TestTileDecoupled:
         obj = (await api.get(f"/api/objects/{room['id']}")).json()
         assert obj["has_tile"] is True
         assert any(w["kind"] == "tile" for w in obj["works"])
+
+
+class TestActParityWithBot:
+    """Акт бота и мини-аппа обязаны сойтись до рубля.
+
+    Раньше не сходились: мини-апп добирал материалы справочными ценами прайса,
+    бот печатал только факт. Один объект — два разных «ИТОГО К ОПЛАТЕ»; заказчику
+    ушёл бы тот, который мастер открыл последним. Справочные цены выпилены 01.08.
+    """
+
+    async def test_same_object_same_total(self, api, app):
+        await _room_flow(app)
+        await app.click("Акт выполненных работ")
+        await app.send("1450")  # почём вышла плитка
+        bot_act = next(t for t in app.texts if "ИТОГО К ОПЛАТЕ" in t)
+        bot_total = re.search(r"ИТОГО К ОПЛАТЕ: ([\d\s\xa0]+₽)", bot_act)
+        assert bot_total, bot_act
+
+        project_id = (await api.get("/api/projects")).json()[0]["id"]
+        web_act = (await api.get(f"/api/projects/{project_id}/act")).json()
+        # И объектный акт (у него своя сборка со сведением строк) — та же цифра.
+        object_act = (await api.get(f"/api/objects/{project_id}/act")).json()
+
+        assert web_act["grand_total_text"] == bot_total.group(1)
+        assert object_act["grand_total_text"] == bot_total.group(1)

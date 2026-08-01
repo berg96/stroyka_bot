@@ -11,6 +11,7 @@
 import math
 from dataclasses import dataclass
 
+from tilebot.core.estimate import tile_paid_area_m2
 from tilebot.core.layout import (
     Layout,
     best_orientation,
@@ -89,10 +90,18 @@ class ProjectResult:
 
     @property
     def tile_cost(self) -> float | None:
-        """Во сколько выйдет плитка, если мастер сам её считает. None — цены нет."""
+        """Во сколько выйдет плитка, если мастер сам её считает. None — цены нет.
+
+        Считаем по оплаченным упаковкам, как в акте: плитку продают пачками, и по
+        голой площади с запасом цифра выходила меньше той, что мастер потом видит
+        в акте (на ванной Сани — 47 502 против 50 112 ₽ за один и тот же кафель).
+        Две цены за одну плитку в одном боте — повод не верить обеим.
+        """
         if not self.tile.price_per_m2:
             return None
-        return sum(m.tile_area_with_waste_m2 for m in self.materials) * self.tile.price_per_m2
+        return sum(
+            tile_paid_area_m2(line) for line in self.purchase if line.kind == "tile"
+        ) * self.tile.price_per_m2
 
     @property
     def advice(self) -> list[str]:

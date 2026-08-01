@@ -94,11 +94,9 @@ function makeApp({initData = 'user=%7B%22id%22%3A1%7D&hash=x'} = {}) {
                 {name: 'Укладка ламината', qty: 2.9, unit: 'м²', price: 600, total: 1764, total_text: '1 764 ₽'}],
         works_total: 26364, works_total_text: '26 364 ₽',
         materials: [{name: 'Плитка 600×300', qty_text: '131', unit: 'шт', packs: 17, cost: isAct ? 35400 : null},
-                    {name: 'Ламинат', qty_text: '2', unit: 'пачек', cost: isAct ? 1800 : null}],
-        materials_total: isAct ? 37200 : 0,
-        rough_materials_total: isAct ? 37200 : 0,
-        rough_total: isAct ? 63564 : 26364, rough_total_text: isAct ? '63 564 ₽' : '26 364 ₽',
-        grand_total: isAct ? 63564 : 26364, grand_total_text: isAct ? '63 564 ₽' : '26 364 ₽', note: ''})};
+                    {name: 'Ламинат', qty_text: '2', unit: 'пачек', cost: null}],
+        materials_total: isAct ? 35400 : 0,
+        grand_total: isAct ? 61764 : 26364, grand_total_text: isAct ? '61 764 ₽' : '26 364 ₽', note: ''})};
     }
     if (/\/api\/objects\/1\/works$/.test(url) && m === 'POST')
       return {ok: true, status: 201, json: async () => (body.kind === 'plumbing' ? plumbingWork() : laminateWork())};
@@ -307,7 +305,18 @@ const byText = (w, sel, t) => [...w.document.querySelectorAll(sel)].find((e) => 
   // Стоимость материалов в смете не показываем: заказчик покупает сам, цифра читается
   // как обещание мастера. Итог «ВСЁ ВМЕСТЕ» вместе с ней ушёл.
   check('смета: без денег за материалы', !ce.w.document.body.textContent.includes('ВСЁ ВМЕСТЕ')
-    && !ce.w.document.body.textContent.includes('63 564'), 'смета не должна показывать цены материалов');
+    && !ce.w.document.body.textContent.includes('35 400'), 'смета не должна показывать цены материалов');
+
+  // Акт — второй документ того же экрана: деньги только по факту (плитка), остальное
+  // купил заказчик. Раньше сюда затекали справочные цены прайса.
+  const ca = makeApp();
+  await wait();
+  byText(ca.w, '.tile-row', 'Ванная').click(); await wait(80);
+  byText(ca.w, '.btn', 'Акт').click(); await wait(80);
+  check('акт: итог с материалами', ca.w.document.body.textContent.includes('61 764'));
+  check('акт: плитка по факту', ca.w.document.body.textContent.includes('35 400'));
+  check('акт: остальное — «заказчик»', ca.w.document.body.textContent.includes('заказчик'),
+    'материалы без факта должны быть помечены, а не пустой строкой');
 
   console.log('\nСоздание без плитки — «замерь комнату» (Саню звали не на плитку)');
   const cm = makeApp();

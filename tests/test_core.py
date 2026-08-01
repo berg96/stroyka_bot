@@ -8,8 +8,8 @@ from tilebot.core.angled import angled_pieces, polygon_area
 from tilebot.core.estimate import (
     PriceList,
     build_estimate,
+    format_act,
     format_estimate,
-    rough_material_cost,
     tile_paid_area_m2,
 )
 from tilebot.core.geometry import (
@@ -426,13 +426,6 @@ class TestTilePacks:
         line = self._tile_line(per_pack=None)
         assert tile_paid_area_m2(line) == pytest.approx(line.area_m2)
 
-    def test_rough_cost_uses_paid_packs_not_bare_area(self):
-        """По голой площади чек занижался — плитку не продают по метру."""
-        line = self._tile_line(per_pack=8)
-        price = PriceList(mat_tile_m2=1500)
-        assert rough_material_cost(line, price) == pytest.approx(tile_paid_area_m2(line) * 1500)
-        assert rough_material_cost(line, price) > (line.area_m2 or 0) * 1500
-
     def test_packs_survive_the_room_summary(self):
         """Смета берёт сведённую закупку: если per_pack там теряется, упаковок нет.
 
@@ -469,19 +462,32 @@ class TestEstimateMoney:
         est = self._est(include_materials_cost=False)
 
         assert est.materials, "список покупок в смете остаётся"
-        assert est.material_costs == {} and est.rough_costs == {}
-        assert est.rough_total == est.works_total  # итог сметы — только работа
+        assert est.material_costs == {}
+        assert est.grand_total == est.works_total  # итог сметы — только работа
         text = format_estimate(est)
         assert "ВСЁ ВМЕСТЕ" not in text
         assert "Материалы — купить" in text
         # Деньги в смете есть только в блоке работ — после списка закупки их нет.
         assert "₽" not in text.split("Материалы — купить")[1]
 
-    def test_act_keeps_material_money(self):
+    def test_act_counts_only_the_price_the_master_entered(self):
+        """В акте деньги — только факт: цена плитки, которую вбил мастер.
+
+        Справочных цен нет: клей и затирку он то покупает, то нет, и выдуманная
+        цена мешка уезжала заказчику в «ИТОГО К ОПЛАТЕ» (выпилено 01.08).
+        """
         est = self._est(include_materials_cost=True)
 
-        assert est.material_costs, "плитку мастер купил на свои — это факт для акта"
-        assert est.grand_total > est.works_total
+        assert set(est.material_costs) == {m.name for m in est.materials if m.kind == "tile"}
+        assert est.grand_total == pytest.approx(est.works_total + est.materials_total)
+        assert "куплено заказчиком" in format_act(est)  # клей, затирка, грунтовка
+
+    def test_act_without_tile_price_bills_only_work(self):
+        lay = build_layout(Surface("стена", 2000, 2700), Tile(600, 300, per_pack=8))
+        est = build_estimate("Ванная", [lay], [calc_materials(lay)], PriceList())
+
+        assert est.material_costs == {}
+        assert est.grand_total == est.works_total
 
 
 class TestAngled:
