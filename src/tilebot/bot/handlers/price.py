@@ -25,8 +25,9 @@ WORK_LABELS = {
     "min_order": "Минимальный заказ, ₽",
 }
 
-# Справочные цены материалов — по ним в смете считается прикидка «во сколько
-# выйдет всё». Это не заработок мастера, а ориентир для заказчика.
+# Справочные цены материалов — по ним считаются деньги за материалы в АКТЕ, если
+# мастер закупался сам, а чеки по каждому мешку вбивать не хочет. В смете их нет:
+# там список покупок без денег, заказчик покупает сам.
 MATERIAL_LABELS = {
     "mat_tile_m2": "Плитка, ₽/м²",
     "mat_glue_kg": "Клей, ₽/кг",
@@ -57,10 +58,11 @@ async def show_price(message: Message, storage: Storage) -> None:
     for field, label in WORK_LABELS.items():
         lines.append(f"• {label}: <b>{money(getattr(price, field))}</b>")
 
-    lines += ["", "<b>Материалы — для прикидки в смете</b>"]
+    lines += ["", "<b>Материалы — для акта, если закупался сам</b>"]
     for field, label in MATERIAL_LABELS.items():
         lines.append(f"• {label}: <b>{money(getattr(price, field))}</b>")
-    lines.append("<i>Это не твой заработок — ориентир заказчику, сколько выйдет всё.</i>")
+    lines.append("<i>По ним в акте считается, сколько заказчик вернёт за материалы. "
+                 "В смете материалы идут без денег — их покупает заказчик.</i>")
 
     signature = " · ".join(x for x in (user.name, user.phone) if x)
     lines += ["", f"Подпись в смете: {signature or '<i>не задана</i>'} — /подпись"]
